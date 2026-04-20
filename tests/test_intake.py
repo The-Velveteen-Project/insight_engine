@@ -240,6 +240,18 @@ async def test_handle_reply_message(db: aiosqlite.Connection) -> None:
     assert row["reply_to_telegram_id"] == 42
 
 
+async def test_handle_bare_help_routes_to_operator(db: aiosqlite.Connection) -> None:
+    update, raw = _make_update(message_id=2004, text="help")
+
+    with patch(
+        "app.services.message_intake.send_message", new=AsyncMock()
+    ) as mock_send:
+        await handle_update(update, db, raw_payload=raw)
+
+    mock_send.assert_awaited_once()
+    assert "Velveteen Operator" in mock_send.call_args[0][1]
+
+
 async def test_handle_empty_update_is_noop(db: aiosqlite.Connection) -> None:
     update = TelegramUpdate(update_id=999)  # no message
     with patch("app.services.message_intake.send_message", new=AsyncMock()) as mock:

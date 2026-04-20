@@ -5,8 +5,14 @@ Minimal prompts for Phase 8 structured draft generation.
 from __future__ import annotations
 
 from app.schemas.drafts import DraftGenerationInput
+from app.services.context_hub import get_static_context
 
-DRAFT_SYSTEM_PROMPT = """
+_SHARED_CONTEXT = get_static_context()
+
+DRAFT_SYSTEM_PROMPT = f"""
+{_SHARED_CONTEXT}
+
+## Draft writer role
 You are helping The Velveteen Project turn an approved editorial plan into a
 usable draft.
 

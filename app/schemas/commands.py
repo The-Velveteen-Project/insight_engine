@@ -24,6 +24,7 @@ class CommandName(StrEnum):
     DRAFT = "draft"
     SHOW_PLAN = "show_plan"
     SHOW_DRAFT = "show_draft"
+    MVP_HANDOFF = "mvp_handoff"
     HELP = "help"
     UNKNOWN = "unknown"
 

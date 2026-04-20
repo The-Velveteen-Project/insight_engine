@@ -9,6 +9,7 @@ from html import escape
 from app.schemas.commands import MvpIdeaSuggestion, SignalSuggestion, WeeklySummary
 from app.schemas.drafts import PersistedEditorialDraft
 from app.schemas.editorial import EditorialPlanStatus, PersistedEditorialPlan
+from app.schemas.mvp_handoff import MvpHandoffPack
 
 
 def compact_text(text: str, limit: int) -> str:
@@ -25,20 +26,21 @@ def escape_text(text: str) -> str:
 def format_help() -> str:
     return "\n".join(
         [
-            "<b>Velveteen commands</b>",
-            "/papers &lt;topic&gt; — papers from arXiv",
-            "/news &lt;topic&gt; — news and article signals",
-            "/signals &lt;topic&gt; — mixed external signals",
-            "/github_insights — repo portfolio signals",
-            "/plan &lt;signal_id&gt; — create a plan from one signal",
-            "/approve &lt;plan_id&gt; — approve a plan",
-            "/discard_plan &lt;plan_id&gt; — discard a plan",
-            "/draft &lt;plan_id&gt; — create a draft from an approved plan",
-            "/show_plan &lt;plan_id&gt; — show a compact plan summary",
-            "/show_draft &lt;draft_id&gt; — show a compact draft summary",
-            "/weekly — weekly summary and next step",
-            "/mvp_ideas &lt;topic&gt; — conservative MVP suggestions",
-            "/help — this guide",
+            "<b>Velveteen Operator</b>",
+            "Puedo buscar señales, crear planes, aprobarlos y sacar drafts.",
+            "",
+            "Ejemplos:",
+            "• signals climate risk",
+            "• papers dengue surveillance",
+            "• github_insights",
+            "• plan 12",
+            "• aprueba el plan 4",
+            "• draft 4",
+            "• show_draft 2",
+            "• mvp_handoff 7",
+            "• weekly",
+            "",
+            "También acepto slash commands si prefieres ese modo.",
         ]
     )
 
@@ -77,9 +79,7 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
     ]
     for signal in summary.top_signals:
         signal_prefix = f"#{signal.signal_id} " if signal.signal_id else ""
-        lines.append(
-            f"• {escape_text(signal_prefix + compact_text(signal.title, 70))}"
-        )
+        lines.append(f"• {escape_text(signal_prefix + compact_text(signal.title, 70))}")
     lines.extend(
         [
             (
@@ -115,10 +115,25 @@ def format_mvp_idea(idea: MvpIdeaSuggestion) -> str:
     return "\n".join(lines)
 
 
+def format_note_capture_ack(text: str) -> str:
+    return "\n".join(
+        [
+            "<b>Lo registré como señal manual</b>",
+            escape_text(compact_text(text, 140)),
+            "Puedo seguir con una de estas rutas:",
+            "• busca papers sobre este tema",
+            "• busca señales relacionadas",
+            "• weekly",
+        ]
+    )
+
+
 def _plan_next_step(plan: PersistedEditorialPlan) -> str:
     if plan.status == EditorialPlanStatus.DRAFT:
         return f"/approve {plan.plan_id} or /discard_plan {plan.plan_id}"
     if plan.status == EditorialPlanStatus.APPROVED:
+        if plan.proposal.recommended_action.value == "mvp":
+            return f"/draft {plan.plan_id} or /mvp_handoff {plan.plan_id}"
         return f"/draft {plan.plan_id} or keep it approved"
     if plan.status == EditorialPlanStatus.SAVED:
         return "keep for later"
@@ -160,5 +175,20 @@ def format_draft_summary(
         f"short: {escape_text(compact_text(content.short_version, 120))}",
         f"cta: {escape_text(compact_text(content.cta, 90))}",
         "next: revise manually or keep for later",
+    ]
+    return "\n".join(lines)
+
+
+def format_mvp_handoff_summary(pack: MvpHandoffPack) -> str:
+    signal_text = ", ".join(str(signal_id) for signal_id in pack.signal_ids)
+    lines = [
+        "<b>MVP handoff ready</b>",
+        f"plan: <code>#{pack.plan_id}</code>",
+        f"signals: <code>{signal_text}</code>",
+        f"thesis: {escape_text(compact_text(pack.thesis, 100))}",
+        f"scope: {escape_text(compact_text(pack.scope_summary, 120))}",
+        f"builder: <code>{escape_text(pack.builder_target)}</code>",
+        f"auditor: <code>{escape_text(pack.auditor_target)}</code>",
+        "next: use the API handoff payload or paste the builder prompt into Codex",
     ]
     return "\n".join(lines)

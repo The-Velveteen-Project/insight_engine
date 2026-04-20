@@ -276,6 +276,24 @@ async def get_editorial_plan_by_id(
     return await cursor.fetchone()
 
 
+async def get_recent_editorial_plans(
+    db: aiosqlite.Connection,
+    *,
+    limit: int = 10,
+) -> list[aiosqlite.Row]:
+    cursor = await db.execute(
+        """
+        SELECT *
+        FROM editorial_plans
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = await cursor.fetchall()
+    return list(rows)
+
+
 async def update_editorial_plan_status(
     db: aiosqlite.Connection,
     plan_id: int,
@@ -349,6 +367,24 @@ async def get_editorial_draft_by_plan_id(
         (plan_id,),
     )
     return await cursor.fetchone()
+
+
+async def get_recent_editorial_drafts(
+    db: aiosqlite.Connection,
+    *,
+    limit: int = 10,
+) -> list[aiosqlite.Row]:
+    cursor = await db.execute(
+        """
+        SELECT *
+        FROM editorial_drafts
+        ORDER BY created_at DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    rows = await cursor.fetchall()
+    return list(rows)
 
 
 async def update_editorial_draft_status(

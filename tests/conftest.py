@@ -5,6 +5,8 @@ import tempfile
 # pydantic-settings reads env at instantiation
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-000")
 os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "")
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["GITHUB_TOKEN"] = ""
 
 _db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _db.close()

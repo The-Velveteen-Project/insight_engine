@@ -32,6 +32,7 @@ from app.schemas.editorial import (
     RecommendedAction,
 )
 from app.schemas.github import GitHubInsightCandidate
+from app.schemas.mvp_handoff import MvpHandoffPack, MvpPromptBundle
 from app.services.draft_generator import (
     DraftGenerationStateError,
     EditorialDraftConflictError,
@@ -41,6 +42,7 @@ from app.services.telegram_orchestrator import (
     build_mvp_idea,
     build_weekly_summary,
     handle_command,
+    handle_operator_text,
     parse_command,
 )
 
@@ -129,6 +131,34 @@ def _persisted_draft(draft_id: int, *, plan_id: int) -> PersistedEditorialDraft:
     )
 
 
+def _mvp_handoff(plan_id: int) -> MvpHandoffPack:
+    return MvpHandoffPack(
+        plan_id=plan_id,
+        signal_ids=[1, 2],
+        thesis="A small signal-to-build workflow for climate risk research",
+        scope_summary=(
+            "Build a narrow workflow that turns signals into a scoped MVP with "
+            "clear constraints, tests, and portfolio relevance."
+        ),
+        context_basis=[
+            "shared_velveteen_context",
+            "dynamic_db_snapshot",
+        ],
+        prompt_architect=MvpPromptBundle(
+            system_prompt="Architect prompt system",
+            user_prompt="Architect prompt user with enough detail to pass validation.",
+        ),
+        builder=MvpPromptBundle(
+            system_prompt="Builder prompt system",
+            user_prompt="Builder prompt user with enough detail to pass validation.",
+        ),
+        auditor=MvpPromptBundle(
+            system_prompt="Auditor prompt system",
+            user_prompt="Auditor prompt user with enough detail to pass validation.",
+        ),
+    )
+
+
 def _signal_candidate(source_id: str, title: str) -> SignalCandidate:
     return SignalCandidate(
         source_type="arxiv",
@@ -174,8 +204,8 @@ def test_parse_command_returns_unknown_for_invalid_text() -> None:
 
 async def test_handle_command_help_returns_guide(db: aiosqlite.Connection) -> None:
     response = await handle_command("/help", db)
-    assert "Velveteen commands" in response
-    assert "/weekly" in response
+    assert "Velveteen Operator" in response
+    assert "weekly" in response
 
 
 async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -> None:
@@ -484,9 +514,7 @@ async def test_handle_command_draft_returns_existing_draft_conflict(
 ) -> None:
     with patch(
         "app.services.telegram_orchestrator.draft_generator.create_persisted_editorial_draft",
-        new=AsyncMock(
-            side_effect=EditorialDraftConflictError(plan_id=12, draft_id=4)
-        ),
+        new=AsyncMock(side_effect=EditorialDraftConflictError(plan_id=12, draft_id=4)),
     ):
         response = await handle_command("/draft 12", db)
 
@@ -550,3 +578,141 @@ async def test_handle_command_invalid_plan_argument_returns_usage(
     response = await handle_command("/plan not-an-id", db)
     assert "<b>Usage</b>" in response
     assert "<code>/plan &lt;signal_id&gt;</code>" in response
+
+
+async def test_handle_command_mvp_handoff_formats_summary(
+    db: aiosqlite.Connection,
+) -> None:
+    with patch(
+        "app.services.telegram_orchestrator.mvp_handoff.create_mvp_handoff_pack",
+        new=AsyncMock(return_value=_mvp_handoff(17)),
+    ):
+        response = await handle_command("/mvp_handoff 17", db)
+
+    assert "MVP handoff ready" in response
+    assert "plan: <code>#17</code>" in response
+    assert "builder:" in response
+
+
+async def test_handle_operator_text_accepts_bare_help(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_operator_text("help", db, chat_id=700)
+    assert response is not None
+    assert "Velveteen Operator" in response
+
+
+async def test_handle_operator_text_accepts_bare_signals(
+    db: aiosqlite.Connection,
+) -> None:
+    candidate = _signal_candidate("2401.40001", "Signal from bare command")
+    signal_id = await _persist_signal(db, candidate)
+
+    with (
+        patch(
+            "app.services.telegram_orchestrator.discovery_service.discover",
+            new=AsyncMock(return_value=[candidate]),
+        ),
+        patch(
+            "app.services.telegram_orchestrator._plan_for_signal_ids",
+            new=AsyncMock(return_value=_plan([signal_id], RecommendedAction.NOTE)),
+        ),
+    ):
+        response = await handle_operator_text(
+            "signals climate risk",
+            db,
+            chat_id=701,
+        )
+
+    assert response is not None
+    assert "Signals: climate risk" in response
+    assert f"#{signal_id}" in response
+
+
+async def test_handle_operator_text_uses_chat_memory_for_plan_del_primero(
+    db: aiosqlite.Connection,
+) -> None:
+    first = _signal_candidate("2401.50001", "First signal")
+    second = _signal_candidate("2401.50002", "Second signal")
+    first_id = await _persist_signal(db, first)
+    await _persist_signal(db, second)
+
+    with (
+        patch(
+            "app.services.telegram_orchestrator.discovery_service.discover",
+            new=AsyncMock(return_value=[first, second]),
+        ),
+        patch(
+            "app.services.telegram_orchestrator._plan_for_signal_ids",
+            new=AsyncMock(return_value=_plan([first_id], RecommendedAction.NOTE)),
+        ),
+    ):
+        await handle_operator_text("signals climate risk", db, chat_id=702)
+
+    persisted = _persisted_plan(
+        30,
+        signal_ids=[first_id],
+        action=RecommendedAction.NOTE,
+    )
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.create_persisted_editorial_plan",
+        new=AsyncMock(return_value=persisted),
+    ) as mock_create:
+        response = await handle_operator_text(
+            "hazme un plan del primero",
+            db,
+            chat_id=702,
+        )
+
+    mock_create.assert_awaited_once_with(db, [first_id])
+    assert response is not None
+    assert "Plan #30 created" in response
+
+
+async def test_handle_operator_text_uses_chat_memory_for_apruebalo(
+    db: aiosqlite.Connection,
+) -> None:
+    persisted_draft = _persisted_plan(
+        44,
+        signal_ids=[9],
+        action=RecommendedAction.POST,
+        status=EditorialPlanStatus.DRAFT,
+    )
+    persisted_approved = _persisted_plan(
+        44,
+        signal_ids=[9],
+        action=RecommendedAction.POST,
+        status=EditorialPlanStatus.APPROVED,
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.get_persisted_editorial_plan",
+        new=AsyncMock(return_value=persisted_draft),
+    ):
+        await handle_operator_text("show_plan 44", db, chat_id=703)
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.transition_editorial_plan",
+        new=AsyncMock(return_value=persisted_approved),
+    ) as mock_transition:
+        response = await handle_operator_text("apruébalo", db, chat_id=703)
+
+    mock_transition.assert_awaited_once_with(
+        db,
+        44,
+        EditorialPlanStatus.APPROVED,
+    )
+    assert response is not None
+    assert "Plan #44 approved" in response
+
+
+async def test_handle_operator_text_returns_note_capture_ack(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_operator_text(
+        "Estoy pensando en una idea sobre dengue y vigilancia.",
+        db,
+        chat_id=704,
+    )
+    assert response is not None
+    assert "Lo registré como señal manual" in response

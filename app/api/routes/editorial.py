@@ -18,7 +18,8 @@ from app.schemas.editorial import (
     EditorialPlanStatus,
     PersistedEditorialPlan,
 )
-from app.services import draft_generator, editorial_planner
+from app.schemas.mvp_handoff import MvpHandoffPack
+from app.services import draft_generator, editorial_planner, mvp_handoff
 
 router = APIRouter(tags=["editorial"])
 
@@ -187,6 +188,25 @@ async def discard_editorial_draft(
             detail=str(exc),
         ) from exc
     except draft_generator.EditorialDraftTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/plans/{plan_id}/mvp-handoff", response_model=MvpHandoffPack)
+async def get_mvp_handoff(
+    plan_id: int,
+    db: Annotated[aiosqlite.Connection, Depends(get_db)] = ...,  # type: ignore[assignment]
+) -> MvpHandoffPack:
+    try:
+        return await mvp_handoff.create_mvp_handoff_pack(db, plan_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except mvp_handoff.MvpHandoffStateError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=str(exc),

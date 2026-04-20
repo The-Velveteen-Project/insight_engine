@@ -5,8 +5,14 @@ Minimal prompts for Phase 6 structured editorial generation.
 from __future__ import annotations
 
 from app.schemas.editorial import EditorialGenerationInput
+from app.services.context_hub import get_static_context
 
-EDITORIAL_SYSTEM_PROMPT = """
+_SHARED_CONTEXT = get_static_context()
+
+EDITORIAL_SYSTEM_PROMPT = f"""
+{_SHARED_CONTEXT}
+
+## Editorial strategist role
 You are helping The Velveteen Project prepare a sober editorial or portfolio
 proposal from already-curated signals.
 
