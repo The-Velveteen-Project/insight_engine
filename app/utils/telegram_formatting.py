@@ -4,11 +4,16 @@ Helpers to format compact Telegram responses with HTML escaping.
 
 from __future__ import annotations
 
+from collections import Counter
 from html import escape
 
 from app.schemas.commands import MvpIdeaSuggestion, SignalSuggestion, WeeklySummary
 from app.schemas.drafts import PersistedEditorialDraft
-from app.schemas.editorial import EditorialPlanStatus, PersistedEditorialPlan
+from app.schemas.editorial import (
+    EditorialPlanStatus,
+    PersistedEditorialPlan,
+    RecommendedAction,
+)
 from app.schemas.mvp_handoff import MvpHandoffPack
 
 
@@ -117,6 +122,37 @@ def _signal_lead(suggestions: list[SignalSuggestion]) -> str:
     )
 
 
+def _signal_operator_take(suggestions: list[SignalSuggestion]) -> str:
+    lead = suggestions[0]
+    top_score = lead.relevance_score
+    actions = [suggestion.suggested_action for suggestion in suggestions[:3]]
+    action_counts = Counter(actions)
+    mixed = len(action_counts) > 1
+    dominant_action = action_counts.most_common(1)[0][0]
+
+    if top_score < 0.45:
+        return (
+            "my take: todavía no hay base fuerte. "
+            "Yo no forzaría nada más allá de <code>archive</code>."
+        )
+    if mixed and top_score < 0.70:
+        return (
+            "my take: aquí hay mezcla de señales. "
+            "Yo lo trataría como <code>note</code> antes que forzar un MVP."
+        )
+    if dominant_action == RecommendedAction.MVP and top_score >= 0.75 and not mixed:
+        return (
+            "my take: aquí sí vale la pena probar un MVP pequeño y bien acotado."
+        )
+    if dominant_action == RecommendedAction.POST:
+        return "my take: esto da para <code>post</code> claro, no para build todavía."
+    if dominant_action == RecommendedAction.NOTE:
+        return (
+            "my take: lo más sensato aquí es una <code>note</code> técnica y sobria."
+        )
+    return "my take: yo lo dejaría en <code>archive</code> por ahora."
+
+
 def format_signal_suggestions(
     heading: str,
     suggestions: list[SignalSuggestion],
@@ -127,6 +163,7 @@ def format_signal_suggestions(
     lines = [
         f"<b>{escape_text(heading)}</b>",
         _signal_lead(suggestions),
+        _signal_operator_take(suggestions),
     ]
     for suggestion in suggestions:
         signal_prefix = f"#{suggestion.signal_id} " if suggestion.signal_id else ""
@@ -160,6 +197,21 @@ def format_signal_suggestions(
 
 
 def format_weekly_summary(summary: WeeklySummary) -> str:
+    if summary.mvp_action == RecommendedAction.MVP:
+        weekly_take = (
+            "my take: aquí sí hay base para explorar una línea de MVP pequeña."
+        )
+    elif summary.editorial_action == RecommendedAction.NOTE:
+        weekly_take = (
+            "my take: esta semana empujaría una <code>note</code> y no un build."
+        )
+    elif summary.editorial_action == RecommendedAction.POST:
+        weekly_take = (
+            "my take: aquí hay mejor ángulo editorial que técnico para construir."
+        )
+    else:
+        weekly_take = "my take: yo sería conservador y archivaría esta línea por ahora."
+
     lines = [
         "<b>Weekly summary</b>",
         f"focus: <code>{escape_text(summary.query)}</code>",
@@ -169,6 +221,7 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
             f"<code>{escape_text(summary.editorial_action.value)}</code>, "
             "with one main angle worth developing."
         ),
+        weekly_take,
         "signals:",
     ]
     for signal in summary.top_signals:
@@ -199,6 +252,14 @@ def format_mvp_idea(idea: MvpIdeaSuggestion) -> str:
         "<b>MVP idea</b>",
         f"query: <code>{escape_text(idea.query)}</code>",
         f"action: <code>{escape_text(idea.recommended_action.value)}</code>",
+        (
+            "my take: "
+            + (
+                "yo sí probaría un MVP pequeño."
+                if idea.recommended_action == RecommendedAction.MVP
+                else "yo no forzaría un build todavía."
+            )
+        ),
         f"thesis: {escape_text(compact_text(idea.thesis, 110))}",
         f"problem: {escape_text(compact_text(idea.problem, 110))}",
         f"why: {escape_text(compact_text(idea.why_it_matters, 110))}",

@@ -45,6 +45,7 @@ from app.services.telegram_orchestrator import (
     handle_operator_text,
     parse_command,
 )
+from app.utils import telegram_formatting
 
 
 def _plan(signal_ids: list[int], action: RecommendedAction) -> EditorialPlan:
@@ -227,6 +228,7 @@ async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -
     assert "Papers: climate risk" in response
     assert f"#{signal_id}" in response
     assert "action: <code>note</code>" in response
+    assert "my take:" in response
 
 
 async def test_handle_command_github_insights_formats_results(
@@ -359,6 +361,7 @@ async def test_handle_command_weekly_uses_summary_formatter(
 
     assert "Weekly summary" in response
     assert "editorial:" in response
+    assert "my take:" in response
 
 
 async def test_handle_command_mvp_ideas_formats_output(
@@ -386,6 +389,57 @@ async def test_handle_command_mvp_ideas_formats_output(
 
     assert "MVP idea" in response
     assert "<code>mvp</code>" in response
+    assert "my take:" in response
+
+
+def test_format_signal_suggestions_is_conservative_for_weak_evidence() -> None:
+    text = telegram_formatting.format_signal_suggestions(
+        "Signals: weak query",
+        [
+            SignalSuggestion(
+                signal_id=3,
+                title="Weak signal",
+                why_it_matters="Interesting but thin.",
+                suggested_action=RecommendedAction.ARCHIVE,
+                relevance_score=0.34,
+            )
+        ],
+    )
+
+    assert "todavía no hay base fuerte" in text
+    assert "<code>archive</code>" in text
+
+
+def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None:
+    text = telegram_formatting.format_signal_suggestions(
+        "Signals: mixed query",
+        [
+            SignalSuggestion(
+                signal_id=8,
+                title="First signal",
+                why_it_matters="Useful but not decisive.",
+                suggested_action=RecommendedAction.POST,
+                relevance_score=0.62,
+            ),
+            SignalSuggestion(
+                signal_id=9,
+                title="Second signal",
+                why_it_matters="Useful but mixed.",
+                suggested_action=RecommendedAction.ARCHIVE,
+                relevance_score=0.58,
+            ),
+            SignalSuggestion(
+                signal_id=10,
+                title="Third signal",
+                why_it_matters="More technical than public.",
+                suggested_action=RecommendedAction.NOTE,
+                relevance_score=0.56,
+            ),
+        ],
+    )
+
+    assert "mezcla de señales" in text
+    assert "<code>note</code>" in text
 
 
 async def test_handle_command_plan_creates_persisted_plan(
