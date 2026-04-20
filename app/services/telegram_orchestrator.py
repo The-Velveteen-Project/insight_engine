@@ -183,6 +183,8 @@ class _ChatState:
     last_signal_ids: list[int]
     last_plan_id: int | None = None
     last_draft_id: int | None = None
+    pending_command: CommandName | None = None
+    pending_target_id: int | None = None
 
 
 _CHAT_STATE: dict[int, _ChatState] = {}
@@ -259,11 +261,30 @@ def _get_state(chat_id: int | None) -> _ChatState | None:
     return _CHAT_STATE.setdefault(chat_id, _ChatState(last_signal_ids=[]))
 
 
+def _set_pending(
+    chat_id: int | None,
+    *,
+    command_name: CommandName | None,
+    target_id: int | None,
+) -> None:
+    state = _get_state(chat_id)
+    if state is None:
+        return
+    state.pending_command = command_name
+    state.pending_target_id = target_id
+
+
 def _remember_signal_ids(chat_id: int | None, signal_ids: list[int]) -> None:
     state = _get_state(chat_id)
     if state is None:
         return
     state.last_signal_ids = signal_ids[: settings.telegram_command_limit]
+    if state.last_signal_ids:
+        state.pending_command = CommandName.PLAN
+        state.pending_target_id = state.last_signal_ids[0]
+    else:
+        state.pending_command = None
+        state.pending_target_id = None
 
 
 def _remember_plan(chat_id: int | None, plan: PersistedEditorialPlan) -> None:
@@ -272,6 +293,16 @@ def _remember_plan(chat_id: int | None, plan: PersistedEditorialPlan) -> None:
         return
     state.last_plan_id = plan.plan_id
     state.last_signal_ids = plan.proposal.signal_ids
+    state.last_draft_id = None
+    if plan.status == EditorialPlanStatus.DRAFT:
+        state.pending_command = CommandName.APPROVE
+        state.pending_target_id = plan.plan_id
+    elif plan.status == EditorialPlanStatus.APPROVED:
+        state.pending_command = CommandName.DRAFT
+        state.pending_target_id = plan.plan_id
+    else:
+        state.pending_command = None
+        state.pending_target_id = None
 
 
 def _remember_draft(chat_id: int | None, draft: PersistedEditorialDraft) -> None:
@@ -281,6 +312,8 @@ def _remember_draft(chat_id: int | None, draft: PersistedEditorialDraft) -> None
     state.last_draft_id = draft.draft_id
     state.last_plan_id = draft.plan_id
     state.last_signal_ids = draft.draft.signal_ids
+    state.pending_command = None
+    state.pending_target_id = None
 
 
 def _resolve_signal_target(
@@ -327,6 +360,57 @@ def _resolve_draft_target(
     return _parse_positive_int(target)
 
 
+def _pending_to_command(state: _ChatState | None) -> ParsedTelegramCommand | None:
+    if (
+        state is None
+        or state.pending_command is None
+        or state.pending_target_id is None
+    ):
+        return None
+    return ParsedTelegramCommand(
+        name=state.pending_command,
+        query=str(state.pending_target_id),
+        raw_text=state.pending_command.value,
+    )
+
+
+def _pending_help(state: _ChatState | None) -> str:
+    if (
+        state is None
+        or state.pending_command is None
+        or state.pending_target_id is None
+    ):
+        return "\n".join(
+            [
+                "<b>No pending action</b>",
+                "Try one of these:",
+                "• signals climate risk",
+                "• github_insights",
+                "• show_plan 12",
+            ]
+        )
+
+    if state.pending_command == CommandName.PLAN:
+        return (
+            "<b>Next step</b>\n"
+            f"Create a plan from signal <code>#{state.pending_target_id}</code>.\n"
+            "You can say <code>hazlo</code> or <code>plan del primero</code>."
+        )
+    if state.pending_command == CommandName.APPROVE:
+        return (
+            "<b>Next step</b>\n"
+            f"Approve plan <code>#{state.pending_target_id}</code>.\n"
+            "You can say <code>hazlo</code> or <code>apruébalo</code>."
+        )
+    if state.pending_command == CommandName.DRAFT:
+        return (
+            "<b>Next step</b>\n"
+            f"Generate a draft from plan <code>#{state.pending_target_id}</code>.\n"
+            "You can say <code>hazlo</code> or <code>draft</code>."
+        )
+    return telegram_formatting.format_help()
+
+
 def _natural_command(
     text: str,
     *,
@@ -336,6 +420,44 @@ def _natural_command(
     if not stripped:
         return None
     normalized = _strip_accents(stripped)
+    lowered = normalized.lower()
+    state = _get_state(chat_id)
+
+    if lowered in {"hazlo", "dale", "continua", "continúa", "ok", "si", "sí"}:
+        pending = _pending_to_command(state)
+        if pending is not None:
+            return pending
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__pending__",
+            raw_text=text,
+        )
+
+    if lowered in {"que sigue", "qué sigue", "que recomiendas", "qué recomiendas"}:
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__pending__",
+            raw_text=text,
+        )
+
+    if lowered in {"muestramelo", "muéstramelo", "show it"}:
+        if state and state.last_draft_id is not None:
+            return ParsedTelegramCommand(
+                name=CommandName.SHOW_DRAFT,
+                query=str(state.last_draft_id),
+                raw_text=text,
+            )
+        if state and state.last_plan_id is not None:
+            return ParsedTelegramCommand(
+                name=CommandName.SHOW_PLAN,
+                query=str(state.last_plan_id),
+                raw_text=text,
+            )
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__pending__",
+            raw_text=text,
+        )
 
     parts = stripped.split(maxsplit=1)
     first_token = _strip_accents(parts[0]).lower()
@@ -355,7 +477,6 @@ def _natural_command(
             raw_text=text,
         )
 
-    state = _get_state(chat_id)
     for pattern, command_name in _TARGET_PATTERNS:
         match = pattern.match(normalized)
         if match is None:
@@ -775,6 +896,8 @@ async def handle_command(
     command = parse_command(raw_text)
 
     if command.name == CommandName.HELP or command.name == CommandName.UNKNOWN:
+        if command.name == CommandName.HELP and command.query == "__pending__":
+            return _pending_help(_get_state(chat_id))
         if command.name == CommandName.UNKNOWN:
             return f"<b>Unknown command</b>\n{telegram_formatting.format_help()}"
         return telegram_formatting.format_help()
@@ -875,6 +998,7 @@ async def handle_command(
                 return _not_found("Plan", entity_id)
             except mvp_handoff.MvpHandoffStateError as exc:
                 return _invalid_transition(str(exc))
+            _set_pending(chat_id, command_name=None, target_id=None)
             return _format_mvp_handoff(pack)
 
     if command.name == CommandName.PAPERS:

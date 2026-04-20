@@ -496,6 +496,11 @@ Today it already behaves like:
 - a human-in-the-loop planning system
 - a draft generator that does not bypass approval
 
+The immediate next product step is:
+
+- make Telegram feel more like a real operator shell and less like a command bot
+- then move persistence from local-first SQLite toward Supabase-backed production state
+
 Still intentionally out of scope:
 
 - LinkedIn publishing
@@ -505,3 +510,32 @@ Still intentionally out of scope:
 - autonomous long-running build execution
 
 That is deliberate. The goal is to close a real founder workflow first, without losing rigor or turning the system into hype infrastructure.
+
+## Near-Term Roadmap
+
+### Phase 1: Telegram operator usability
+
+Current focus:
+
+- stronger short-lived chat memory
+- smoother follow-ups like `hazlo`, `apruébalo`, `muéstramelo`, `qué sigue`
+- clearer next-step guidance after signals, plans, and drafts
+- less menu friction, more operator behavior
+
+This phase is about comfort and continuity, not more endpoints.
+
+### Phase 2: Supabase migration
+
+Planned next:
+
+- move persistence from SQLite-only operation toward Supabase-backed production state
+- keep the same core workflow and contracts
+- use Supabase primarily for durability and operational stability, not for product theater
+
+The repo already exposes placeholders in `.env.example` for:
+
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
+
+Those values are not wired into the runtime yet. They are there to keep the migration path explicit and documented.

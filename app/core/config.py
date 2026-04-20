@@ -30,6 +30,9 @@ class Settings(BaseSettings):
         "The-Velveteen-Project/StochastoGreen,"
         "The-Velveteen-Project/EcoAgent"
     )
+    supabase_url: str = ""
+    supabase_anon_key: str = ""
+    supabase_service_role_key: str = ""
 
     enable_scheduler: bool = False
     weekly_discovery_query: str = (

@@ -669,6 +669,42 @@ async def test_handle_operator_text_uses_chat_memory_for_plan_del_primero(
     assert "Plan #30 created" in response
 
 
+async def test_handle_operator_text_uses_pending_action_for_hazlo_after_signals(
+    db: aiosqlite.Connection,
+) -> None:
+    first = _signal_candidate("2401.50011", "First signal")
+    second = _signal_candidate("2401.50012", "Second signal")
+    first_id = await _persist_signal(db, first)
+    await _persist_signal(db, second)
+
+    with (
+        patch(
+            "app.services.telegram_orchestrator.discovery_service.discover",
+            new=AsyncMock(return_value=[first, second]),
+        ),
+        patch(
+            "app.services.telegram_orchestrator._plan_for_signal_ids",
+            new=AsyncMock(return_value=_plan([first_id], RecommendedAction.NOTE)),
+        ),
+    ):
+        await handle_operator_text("signals climate risk", db, chat_id=705)
+
+    persisted = _persisted_plan(
+        31,
+        signal_ids=[first_id],
+        action=RecommendedAction.NOTE,
+    )
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.create_persisted_editorial_plan",
+        new=AsyncMock(return_value=persisted),
+    ) as mock_create:
+        response = await handle_operator_text("hazlo", db, chat_id=705)
+
+    mock_create.assert_awaited_once_with(db, [first_id])
+    assert response is not None
+    assert "Plan #31 created" in response
+
+
 async def test_handle_operator_text_uses_chat_memory_for_apruebalo(
     db: aiosqlite.Connection,
 ) -> None:
@@ -704,6 +740,88 @@ async def test_handle_operator_text_uses_chat_memory_for_apruebalo(
     )
     assert response is not None
     assert "Plan #44 approved" in response
+
+
+async def test_handle_operator_text_uses_pending_action_for_hazlo_after_approved_plan(
+    db: aiosqlite.Connection,
+) -> None:
+    approved = _persisted_plan(
+        45,
+        signal_ids=[9],
+        action=RecommendedAction.POST,
+        status=EditorialPlanStatus.APPROVED,
+    )
+    draft = _persisted_draft(10, plan_id=45)
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.get_persisted_editorial_plan",
+        new=AsyncMock(return_value=approved),
+    ):
+        await handle_operator_text("show_plan 45", db, chat_id=706)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.create_persisted_editorial_draft",
+        new=AsyncMock(return_value=draft),
+    ) as mock_create:
+        response = await handle_operator_text("hazlo", db, chat_id=706)
+
+    mock_create.assert_awaited_once_with(db, 45)
+    assert response is not None
+    assert "Draft #10 created" in response
+
+
+async def test_handle_operator_text_que_sigue_returns_pending_hint(
+    db: aiosqlite.Connection,
+) -> None:
+    candidate = _signal_candidate("2401.60001", "Signal for next step")
+    signal_id = await _persist_signal(db, candidate)
+
+    with (
+        patch(
+            "app.services.telegram_orchestrator.discovery_service.discover",
+            new=AsyncMock(return_value=[candidate]),
+        ),
+        patch(
+            "app.services.telegram_orchestrator._plan_for_signal_ids",
+            new=AsyncMock(return_value=_plan([signal_id], RecommendedAction.NOTE)),
+        ),
+    ):
+        await handle_operator_text("signals climate risk", db, chat_id=707)
+
+    response = await handle_operator_text("qué sigue", db, chat_id=707)
+    assert response is not None
+    assert "Next step" in response
+    assert f"<code>#{signal_id}</code>" in response
+
+
+async def test_handle_operator_text_muestramelo_prefers_last_draft(
+    db: aiosqlite.Connection,
+) -> None:
+    persisted = _persisted_draft(11, plan_id=46)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.get_persisted_editorial_draft",
+        new=AsyncMock(return_value=persisted),
+    ):
+        await handle_command("/show_draft 11", db, chat_id=708)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.get_persisted_editorial_draft",
+        new=AsyncMock(return_value=persisted),
+    ) as mock_get:
+        response = await handle_operator_text("muéstramelo", db, chat_id=708)
+
+    mock_get.assert_awaited_once_with(db, 11)
+    assert response is not None
+    assert "<b>Draft #11</b>" in response
+
+
+async def test_handle_operator_text_hazlo_without_pending_returns_guidance(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_operator_text("hazlo", db, chat_id=709)
+    assert response is not None
+    assert "No pending action" in response
 
 
 async def test_handle_operator_text_returns_note_capture_ack(

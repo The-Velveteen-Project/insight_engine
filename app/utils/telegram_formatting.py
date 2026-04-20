@@ -68,6 +68,19 @@ def format_signal_suggestions(
                 ),
             ]
         )
+    first = suggestions[0]
+    if first.signal_id is not None:
+        lines.extend(
+            [
+                "",
+                (
+                    "recommendation: start with "
+                    f"<code>#{first.signal_id}</code> as "
+                    f"<code>{escape_text(first.suggested_action.value)}</code>"
+                ),
+                "next: hazme un plan del primero",
+            ]
+        )
     return "\n".join(lines)
 
 
@@ -93,6 +106,7 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
                 f" — {escape_text(compact_text(summary.mvp_summary, 110))}"
             ),
             f"next: {escape_text(compact_text(summary.next_step, 110))}",
+            "follow-up: hazme un plan del primero",
         ]
     )
     return "\n".join(lines)
@@ -112,6 +126,8 @@ def format_mvp_idea(idea: MvpIdeaSuggestion) -> str:
         f"fit: {escape_text(compact_text(idea.portfolio_fit, 100))}",
         f"signals: <code>{signal_text}</code>",
     ]
+    if idea.signal_ids:
+        lines.append("next: hazme un plan del primero")
     return "\n".join(lines)
 
 
@@ -123,6 +139,7 @@ def format_note_capture_ack(text: str) -> str:
             "Puedo seguir con una de estas rutas:",
             "• busca papers sobre este tema",
             "• busca señales relacionadas",
+            "• qué sigue",
             "• weekly",
         ]
     )
@@ -157,6 +174,10 @@ def format_plan_summary(
         f"signals: <code>{escape_text(signal_text)}</code>",
         f"next: {escape_text(_plan_next_step(plan))}",
     ]
+    if plan.status == EditorialPlanStatus.DRAFT:
+        lines.append("you can also say: apruébalo")
+    elif plan.status == EditorialPlanStatus.APPROVED:
+        lines.append("you can also say: hazlo")
     return "\n".join(lines)
 
 
@@ -175,6 +196,7 @@ def format_draft_summary(
         f"short: {escape_text(compact_text(content.short_version, 120))}",
         f"cta: {escape_text(compact_text(content.cta, 90))}",
         "next: revise manually or keep for later",
+        "if needed: muéstramelo",
     ]
     return "\n".join(lines)
 
