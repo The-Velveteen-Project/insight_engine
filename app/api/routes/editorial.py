@@ -12,12 +12,13 @@ import aiosqlite
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db.session import get_db
+from app.schemas.drafts import PersistedEditorialDraft
 from app.schemas.editorial import (
     EditorialPlanRequest,
     EditorialPlanStatus,
     PersistedEditorialPlan,
 )
-from app.services import editorial_planner
+from app.services import draft_generator, editorial_planner
 
 router = APIRouter(tags=["editorial"])
 
@@ -123,3 +124,70 @@ async def discard_editorial_plan(
         plan_id=plan_id,
         target_status=EditorialPlanStatus.DISCARDED,
     )
+
+
+@router.post("/plans/{plan_id}/draft", response_model=PersistedEditorialDraft)
+async def create_editorial_draft(
+    plan_id: int,
+    db: Annotated[aiosqlite.Connection, Depends(get_db)] = ...,  # type: ignore[assignment]
+) -> PersistedEditorialDraft:
+    """
+    Generate and persist a draft from an already approved editorial plan.
+
+    This endpoint is stateful in Phase 8. It requires the source plan to
+    already be approved and returns 409 if a draft already exists for that plan.
+    """
+    try:
+        return await draft_generator.create_persisted_editorial_draft(db, plan_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except draft_generator.EditorialDraftConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "message": str(exc),
+                "draft_id": exc.draft_id,
+                "plan_id": exc.plan_id,
+            },
+        ) from exc
+    except draft_generator.DraftGenerationStateError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc
+
+
+@router.get("/drafts/{draft_id}", response_model=PersistedEditorialDraft)
+async def get_editorial_draft(
+    draft_id: int,
+    db: Annotated[aiosqlite.Connection, Depends(get_db)] = ...,  # type: ignore[assignment]
+) -> PersistedEditorialDraft:
+    try:
+        return await draft_generator.get_persisted_editorial_draft(db, draft_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/drafts/{draft_id}/discard", response_model=PersistedEditorialDraft)
+async def discard_editorial_draft(
+    draft_id: int,
+    db: Annotated[aiosqlite.Connection, Depends(get_db)] = ...,  # type: ignore[assignment]
+) -> PersistedEditorialDraft:
+    try:
+        return await draft_generator.discard_persisted_editorial_draft(db, draft_id)
+    except LookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except draft_generator.EditorialDraftTransitionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=str(exc),
+        ) from exc

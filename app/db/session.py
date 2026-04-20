@@ -91,6 +91,20 @@ CREATE TABLE IF NOT EXISTS editorial_plans (
 )
 """
 
+_CREATE_EDITORIAL_DRAFTS = """
+CREATE TABLE IF NOT EXISTS editorial_drafts (
+    id            INTEGER   PRIMARY KEY AUTOINCREMENT,
+    plan_id       INTEGER   NOT NULL UNIQUE REFERENCES editorial_plans(id),
+    draft_json    TEXT      NOT NULL,
+    status        TEXT      NOT NULL DEFAULT 'draft'
+                               CHECK (status IN ('draft', 'discarded')),
+    llm_used      BOOLEAN   NOT NULL DEFAULT 0,
+    fallback_used BOOLEAN   NOT NULL DEFAULT 0,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 # Idempotent migrations — ALTER TABLE ADD COLUMN is a no-op if the column
 # already exists (OperationalError is caught and silenced in _migrate).
 _MIGRATIONS: list[str] = [
@@ -116,6 +130,8 @@ _CREATE_INDEXES = [
     " ON editorial_plans(status)",
     "CREATE INDEX IF NOT EXISTS idx_editorial_plans_created_at"
     " ON editorial_plans(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_editorial_drafts_status"
+    " ON editorial_drafts(status)",
 ]
 
 
@@ -138,6 +154,7 @@ async def init_db() -> None:
         await db.execute(_CREATE_UPDATED_AT_TRIGGER)
         await db.execute(_CREATE_SIGNALS)
         await db.execute(_CREATE_EDITORIAL_PLANS)
+        await db.execute(_CREATE_EDITORIAL_DRAFTS)
         for stmt in _CREATE_INDEXES:
             await db.execute(stmt)
         await _migrate(db)

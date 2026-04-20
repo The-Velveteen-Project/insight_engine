@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from app.api.routes import discovery, editorial, github, health, telegram
 from app.core.config import settings
 from app.db.session import init_db
+from app.services.scheduler import build_scheduler
 
 
 @asynccontextmanager
@@ -16,7 +17,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     await init_db()
+    scheduler = build_scheduler()
+    if scheduler is not None:
+        await scheduler.start()
     yield
+    if scheduler is not None:
+        await scheduler.shutdown()
 
 
 app = FastAPI(

@@ -74,6 +74,16 @@ def get_enabled_sources() -> tuple[DiscoverySource, ...]:
     return tuple(sources)
 
 
+def get_sources_by_name(names: Sequence[str]) -> tuple[DiscoverySource, ...]:
+    registry = _source_registry()
+    sources: list[DiscoverySource] = []
+    for name in names:
+        source = registry.get(name.strip().lower())
+        if source is not None:
+            sources.append(source)
+    return tuple(sources)
+
+
 async def _safe_fetch(
     source_name: str,
     operation: Awaitable[list[SignalCandidate]],

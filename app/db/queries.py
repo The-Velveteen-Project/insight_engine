@@ -7,6 +7,7 @@ import aiosqlite
 
 from app.domain.message import Message
 from app.schemas.discovery import SignalCandidate
+from app.schemas.drafts import EditorialDraft, EditorialDraftStatus
 from app.schemas.editorial import EditorialPlan, EditorialPlanStatus
 
 
@@ -207,6 +208,25 @@ async def get_signals_by_ids(
     ]
 
 
+async def get_signal_by_source_identity(
+    db: aiosqlite.Connection,
+    *,
+    source_type: str,
+    source_id: str,
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        """
+        SELECT *
+        FROM signals
+        WHERE source_type = ? AND source_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (source_type, source_id),
+    )
+    return await cursor.fetchone()
+
+
 # ---------------------------------------------------------------------------
 # Editorial plans
 # ---------------------------------------------------------------------------
@@ -271,5 +291,79 @@ async def update_editorial_plan_status(
         WHERE id = ?
         """,
         (status.value, plan_id),
+    )
+    await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Editorial drafts
+# ---------------------------------------------------------------------------
+
+
+async def insert_editorial_draft(
+    db: aiosqlite.Connection,
+    draft: EditorialDraft,
+    *,
+    status: EditorialDraftStatus = EditorialDraftStatus.DRAFT,
+) -> int:
+    cursor = await db.execute(
+        """
+        INSERT INTO editorial_drafts (
+            plan_id,
+            draft_json,
+            status,
+            llm_used,
+            fallback_used
+        ) VALUES (?, ?, ?, ?, ?)
+        """,
+        (
+            draft.plan_id,
+            draft.model_dump_json(),
+            status.value,
+            int(draft.llm_used),
+            int(draft.fallback_used),
+        ),
+    )
+    await db.commit()
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+async def get_editorial_draft_by_id(
+    db: aiosqlite.Connection,
+    draft_id: int,
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        "SELECT * FROM editorial_drafts WHERE id = ?",
+        (draft_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def get_editorial_draft_by_plan_id(
+    db: aiosqlite.Connection,
+    plan_id: int,
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        "SELECT * FROM editorial_drafts WHERE plan_id = ?",
+        (plan_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def update_editorial_draft_status(
+    db: aiosqlite.Connection,
+    draft_id: int,
+    status: EditorialDraftStatus,
+) -> None:
+    await db.execute(
+        """
+        UPDATE editorial_drafts
+        SET
+            status = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (status.value, draft_id),
     )
     await db.commit()

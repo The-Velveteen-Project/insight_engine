@@ -274,6 +274,11 @@ def test_score_sorts_descending() -> None:
 
 async def test_discover_persists_to_db(db: aiosqlite.Connection) -> None:
     """discover() must write to signals table and return ranked candidates."""
+    before_cursor = await db.execute("SELECT COUNT(*) FROM signals")
+    before_row = await before_cursor.fetchone()
+    assert before_row is not None
+    before_count = int(before_row[0])
+
     mock_candidates = [
         _candidate(
             source_id="arxiv_001",
@@ -309,7 +314,7 @@ async def test_discover_persists_to_db(db: aiosqlite.Connection) -> None:
     cursor = await db.execute("SELECT COUNT(*) FROM signals")
     row = await cursor.fetchone()
     assert row is not None
-    assert row[0] == 2
+    assert row[0] - before_count == 2
 
 
 async def test_discover_respects_limit(db: aiosqlite.Connection) -> None:

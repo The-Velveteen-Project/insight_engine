@@ -1,0 +1,662 @@
+"""
+Telegram command orchestration layer for Phase 9.
+
+This module acts as glue:
+- parses Telegram commands
+- invokes existing discovery and GitHub services
+- uses editorial planning logic conservatively
+- formats compact Telegram responses
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass
+from typing import Literal
+
+import aiosqlite
+
+from app.core.config import settings
+from app.db.queries import get_signal_by_source_identity
+from app.schemas.commands import (
+    CommandName,
+    MvpIdeaSuggestion,
+    ParsedTelegramCommand,
+    SignalSuggestion,
+    WeeklySummary,
+)
+from app.schemas.discovery import SignalCandidate
+from app.schemas.drafts import PersistedEditorialDraft
+from app.schemas.editorial import (
+    EditorialPlan,
+    EditorialPlanStatus,
+    PersistedEditorialPlan,
+    RecommendedAction,
+)
+from app.schemas.github import GitHubInsightCandidate
+from app.services import (
+    discovery_service,
+    draft_generator,
+    editorial_planner,
+    github_insight_service,
+)
+from app.utils import telegram_formatting
+
+logger = logging.getLogger(__name__)
+
+_COMMAND_RE = re.compile(
+    r"^/(?P<name>[A-Za-z_]+)(?:@[A-Za-z0-9_]+)?(?:\s+(?P<query>.*))?$"
+)
+_QUERY_REQUIRED = {
+    CommandName.PAPERS,
+    CommandName.NEWS,
+    CommandName.SIGNALS,
+    CommandName.MVP_IDEAS,
+}
+_ID_REQUIRED = {
+    CommandName.PLAN,
+    CommandName.APPROVE,
+    CommandName.DISCARD_PLAN,
+    CommandName.DRAFT,
+    CommandName.SHOW_PLAN,
+    CommandName.SHOW_DRAFT,
+}
+_DISCOVERY_LABELS: dict[str, str] = {
+    "arxiv": "arXiv API",
+    "hackernews": "Hacker News Algolia",
+    "github": "GitHub REST",
+}
+
+
+@dataclass(frozen=True)
+class _CandidateRef:
+    source_type: Literal["arxiv", "hackernews", "github"]
+    source_id: str
+    title: str
+    summary: str
+    relevance_score: float
+    relevance_note: str
+
+
+def parse_command(text: str) -> ParsedTelegramCommand:
+    stripped = text.strip()
+    match = _COMMAND_RE.match(stripped)
+    if match is None:
+        return ParsedTelegramCommand(
+            name=CommandName.UNKNOWN,
+            query=None,
+            raw_text=text,
+        )
+
+    raw_name = match.group("name").lower()
+    query = (match.group("query") or "").strip() or None
+    try:
+        name = CommandName(raw_name)
+    except ValueError:
+        name = CommandName.UNKNOWN
+
+    return ParsedTelegramCommand(name=name, query=query, raw_text=text)
+
+
+def is_command_text(text: str | None) -> bool:
+    return bool(text and text.strip().startswith("/"))
+
+
+def _usage(command_name: CommandName) -> str:
+    examples = {
+        CommandName.PLAN: "/plan <signal_id>",
+        CommandName.APPROVE: "/approve <plan_id>",
+        CommandName.DISCARD_PLAN: "/discard_plan <plan_id>",
+        CommandName.DRAFT: "/draft <plan_id>",
+        CommandName.SHOW_PLAN: "/show_plan <plan_id>",
+        CommandName.SHOW_DRAFT: "/show_draft <draft_id>",
+    }
+    example = examples.get(command_name)
+    if example is None:
+        return telegram_formatting.format_help()
+    return f"<b>Usage</b>\n<code>{telegram_formatting.escape_text(example)}</code>"
+
+
+def _parse_positive_int(raw_value: str | None) -> int | None:
+    if raw_value is None:
+        return None
+    try:
+        value = int(raw_value.strip())
+    except ValueError:
+        return None
+    return value if value > 0 else None
+
+
+def _not_found(entity: str, entity_id: int) -> str:
+    return f"<b>{entity} not found</b>\n<code>{entity_id}</code>"
+
+
+def _invalid_transition(message: str) -> str:
+    return f"<b>Invalid state</b>\n{telegram_formatting.escape_text(message)}"
+
+
+def _candidate_ref(
+    candidate: SignalCandidate | GitHubInsightCandidate,
+) -> _CandidateRef:
+    if isinstance(candidate, SignalCandidate):
+        return _CandidateRef(
+            source_type=candidate.source_type,
+            source_id=candidate.source_id,
+            title=candidate.title,
+            summary=candidate.summary,
+            relevance_score=candidate.relevance_score,
+            relevance_note=candidate.relevance_note,
+        )
+    return _CandidateRef(
+        source_type="github",
+        source_id=candidate.source_id,
+        title=candidate.title,
+        summary=candidate.summary,
+        relevance_score=candidate.relevance_score,
+        relevance_note=candidate.relevance_note,
+    )
+
+
+async def _get_signal_id(
+    db: aiosqlite.Connection,
+    candidate: _CandidateRef,
+) -> int | None:
+    row = await get_signal_by_source_identity(
+        db,
+        source_type=candidate.source_type,
+        source_id=candidate.source_id,
+    )
+    if row is None:
+        return None
+    return int(row["id"])
+
+
+async def _plan_for_signal_ids(
+    db: aiosqlite.Connection,
+    signal_ids: list[int],
+) -> EditorialPlan:
+    return await editorial_planner.plan_editorial(
+        db,
+        signal_ids,
+        use_generation=False,
+    )
+
+
+async def _candidate_to_suggestion(
+    db: aiosqlite.Connection,
+    candidate: _CandidateRef,
+) -> SignalSuggestion:
+    signal_id = await _get_signal_id(db, candidate)
+    if signal_id is None:
+        suggested_action = RecommendedAction.NOTE
+        why_it_matters = candidate.relevance_note or candidate.summary
+    else:
+        plan = await _plan_for_signal_ids(db, [signal_id])
+        suggested_action = plan.recommended_action
+        why_it_matters = plan.why_it_matters
+    return SignalSuggestion(
+        signal_id=signal_id,
+        title=candidate.title,
+        why_it_matters=why_it_matters,
+        suggested_action=suggested_action,
+        relevance_score=candidate.relevance_score,
+    )
+
+
+async def _candidates_to_suggestions(
+    db: aiosqlite.Connection,
+    candidates: list[_CandidateRef],
+) -> list[SignalSuggestion]:
+    suggestions: list[SignalSuggestion] = []
+    for candidate in candidates[: settings.telegram_command_limit]:
+        suggestions.append(await _candidate_to_suggestion(db, candidate))
+    return suggestions
+
+
+async def _discover_refs(
+    db: aiosqlite.Connection,
+    query: str,
+    *,
+    source_names: tuple[str, ...] | None = None,
+    message_id: int | None = None,
+) -> list[_CandidateRef]:
+    sources = (
+        discovery_service.get_sources_by_name(source_names)
+        if source_names is not None
+        else None
+    )
+    candidates = await discovery_service.discover(
+        query,
+        db,
+        limit=settings.telegram_command_limit,
+        message_id=message_id,
+        sources=sources,
+    )
+    return [_candidate_ref(candidate) for candidate in candidates]
+
+
+async def _github_refs(
+    db: aiosqlite.Connection,
+    *,
+    message_id: int | None = None,
+) -> list[_CandidateRef]:
+    repos = settings.priority_github_repo_list
+    if not repos:
+        return []
+    candidates = await github_insight_service.suggest_repo_insights(
+        repos,
+        db,
+        limit=settings.telegram_command_limit,
+        message_id=message_id,
+    )
+    return [_candidate_ref(candidate) for candidate in candidates]
+
+
+def _dedup_signal_ids(signal_ids: list[int]) -> list[int]:
+    seen: set[int] = set()
+    ordered: list[int] = []
+    for signal_id in signal_ids:
+        if signal_id in seen:
+            continue
+        seen.add(signal_id)
+        ordered.append(signal_id)
+    return ordered
+
+
+async def _top_signal_ids(
+    db: aiosqlite.Connection,
+    candidates: list[_CandidateRef],
+    *,
+    limit: int = 3,
+) -> list[int]:
+    pairs: list[tuple[float, int]] = []
+    for candidate in candidates:
+        signal_id = await _get_signal_id(db, candidate)
+        if signal_id is None:
+            continue
+        pairs.append((candidate.relevance_score, signal_id))
+    pairs.sort(key=lambda item: item[0], reverse=True)
+    return _dedup_signal_ids([signal_id for _, signal_id in pairs])[:limit]
+
+
+def _possible_sources(candidates: list[_CandidateRef]) -> list[str]:
+    labels: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        label = _DISCOVERY_LABELS[candidate.source_type]
+        if label in seen:
+            continue
+        seen.add(label)
+        labels.append(label)
+    return labels or ["Persisted signals"]
+
+
+def _system_type(candidates: list[_CandidateRef], action: RecommendedAction) -> str:
+    source_types = {candidate.source_type for candidate in candidates}
+    if action != RecommendedAction.MVP:
+        return "editorial and signal review workflow"
+    if "github" in source_types and len(source_types) > 1:
+        return "small signal-to-build workflow with repo context"
+    if "github" in source_types:
+        return "repo insight and portfolio update workflow"
+    return "small discovery and ranking workflow"
+
+
+def _portfolio_fit(candidates: list[_CandidateRef], action: RecommendedAction) -> str:
+    if action == RecommendedAction.MVP:
+        return (
+            "Fits the lab by turning external signals and repo work into a small, "
+            "applied decision-systems build."
+        )
+    return (
+        "Fits the lab by converting signals into sober editorial or research output "
+        "without forcing an oversized build."
+    )
+
+
+def _next_step(plan: EditorialPlan, signal_ids: list[int]) -> str:
+    signal_ref = ", ".join(f"#{signal_id}" for signal_id in signal_ids)
+    if plan.recommended_action == RecommendedAction.MVP:
+        return (
+            f"Promote {signal_ref} into an approved plan and scope "
+            "one one-week build."
+        )
+    if plan.recommended_action == RecommendedAction.NOTE:
+        return f"Turn {signal_ref} into a technical note and keep the angle narrow."
+    if plan.recommended_action == RecommendedAction.POST:
+        return (
+            f"Draft a compact public insight from {signal_ref} "
+            "and keep tracking evidence."
+        )
+    return f"Archive {signal_ref} for now and wait for stronger convergence."
+
+
+async def build_weekly_summary(
+    db: aiosqlite.Connection,
+    *,
+    query: str | None = None,
+    message_id: int | None = None,
+) -> WeeklySummary | None:
+    resolved_query = query or settings.weekly_discovery_query
+    external = await _discover_refs(db, resolved_query, message_id=message_id)
+    github_refs = await _github_refs(db, message_id=message_id)
+    combined = sorted(
+        external + github_refs,
+        key=lambda item: item.relevance_score,
+        reverse=True,
+    )
+    if not combined:
+        return None
+
+    signal_ids = await _top_signal_ids(db, combined, limit=3)
+    if not signal_ids:
+        return None
+
+    suggestions = await _candidates_to_suggestions(db, combined[:3])
+    plan = await _plan_for_signal_ids(db, signal_ids)
+    mvp_idea = await build_mvp_idea(
+        db,
+        resolved_query,
+        message_id=message_id,
+        candidate_refs=combined,
+    )
+    return WeeklySummary(
+        query=resolved_query,
+        top_signals=suggestions[:3],
+        editorial_action=plan.recommended_action,
+        editorial_angle=plan.angle,
+        mvp_action=mvp_idea.recommended_action,
+        mvp_summary=mvp_idea.thesis,
+        next_step=_next_step(plan, signal_ids),
+    )
+
+
+async def build_mvp_idea(
+    db: aiosqlite.Connection,
+    query: str,
+    *,
+    message_id: int | None = None,
+    candidate_refs: list[_CandidateRef] | None = None,
+) -> MvpIdeaSuggestion:
+    combined = candidate_refs
+    if combined is None:
+        external = await _discover_refs(db, query, message_id=message_id)
+        github_refs = await _github_refs(db, message_id=message_id)
+        combined = sorted(
+            external + github_refs,
+            key=lambda item: item.relevance_score,
+            reverse=True,
+        )
+
+    if not combined:
+        return MvpIdeaSuggestion(
+            query=query,
+            recommended_action=RecommendedAction.ARCHIVE,
+            thesis="No useful signal base was found for an MVP suggestion.",
+            problem="The current search did not produce enough relevant evidence.",
+            why_it_matters=(
+                "Forcing an MVP here would add noise rather than portfolio value."
+            ),
+            possible_sources=["Persisted signals"],
+            system_type="no build suggested",
+            portfolio_fit=(
+                "Better to wait for stronger evidence before proposing a build."
+            ),
+            signal_ids=[],
+        )
+
+    signal_ids = await _top_signal_ids(db, combined, limit=3)
+    if not signal_ids:
+        return MvpIdeaSuggestion(
+            query=query,
+            recommended_action=RecommendedAction.ARCHIVE,
+            thesis="Signals were discovered, but they were not stable enough to use.",
+            problem=(
+                "The discovered candidates could not be mapped cleanly into "
+                "persisted workflow ids."
+            ),
+            why_it_matters=(
+                "A conservative fallback is better than inventing an unsupported MVP."
+            ),
+            possible_sources=_possible_sources(combined),
+            system_type="no build suggested",
+            portfolio_fit="Wait for a cleaner set of persisted signals.",
+            signal_ids=[],
+        )
+
+    plan = await _plan_for_signal_ids(db, signal_ids)
+    if plan.recommended_action != RecommendedAction.MVP:
+        return MvpIdeaSuggestion(
+            query=query,
+            recommended_action=plan.recommended_action,
+            thesis=plan.angle,
+            problem=(
+                "The current evidence is useful, but it is not strong enough "
+                "for a credible MVP."
+            ),
+            why_it_matters=plan.why_it_matters,
+            possible_sources=_possible_sources(combined),
+            system_type="editorial and signal review workflow",
+            portfolio_fit=_portfolio_fit(combined, plan.recommended_action),
+            signal_ids=signal_ids,
+        )
+
+    return MvpIdeaSuggestion(
+        query=query,
+        recommended_action=RecommendedAction.MVP,
+        thesis=plan.angle,
+        problem=plan.why_it_matters,
+        why_it_matters=(
+            "The signals converge enough to justify a small, testable build "
+            "rather than "
+            "another commentary-only artifact."
+        ),
+        possible_sources=_possible_sources(combined),
+        system_type=_system_type(combined, plan.recommended_action),
+        portfolio_fit=_portfolio_fit(combined, plan.recommended_action),
+        signal_ids=signal_ids,
+    )
+
+
+async def _format_query_results(
+    db: aiosqlite.Connection,
+    *,
+    heading: str,
+    candidates: list[_CandidateRef],
+) -> str:
+    suggestions = await _candidates_to_suggestions(db, candidates)
+    return telegram_formatting.format_signal_suggestions(heading, suggestions)
+
+
+def _format_plan_created(plan: PersistedEditorialPlan) -> str:
+    return telegram_formatting.format_plan_summary(
+        plan,
+        heading=f"Plan #{plan.plan_id} created",
+    )
+
+
+def _format_plan_updated(
+    plan: PersistedEditorialPlan,
+    *,
+    verb: str,
+) -> str:
+    return telegram_formatting.format_plan_summary(
+        plan,
+        heading=f"Plan #{plan.plan_id} {verb}",
+    )
+
+
+def _format_draft_created(draft: PersistedEditorialDraft) -> str:
+    return telegram_formatting.format_draft_summary(
+        draft,
+        heading=f"Draft #{draft.draft_id} created",
+    )
+
+
+async def handle_command(
+    raw_text: str,
+    db: aiosqlite.Connection,
+    *,
+    message_id: int | None = None,
+) -> str:
+    command = parse_command(raw_text)
+
+    if command.name == CommandName.HELP or command.name == CommandName.UNKNOWN:
+        if command.name == CommandName.UNKNOWN:
+            return (
+                "<b>Unknown command</b>\n"
+                f"{telegram_formatting.format_help()}"
+            )
+        return telegram_formatting.format_help()
+
+    if command.name in _QUERY_REQUIRED and not command.query:
+        return _usage(command.name)
+
+    if command.name in _ID_REQUIRED:
+        entity_id = _parse_positive_int(command.query)
+        if entity_id is None:
+            return _usage(command.name)
+
+        if command.name == CommandName.PLAN:
+            try:
+                plan = await editorial_planner.create_persisted_editorial_plan(
+                    db,
+                    [entity_id],
+                )
+            except LookupError:
+                return _not_found("Signal", entity_id)
+            return _format_plan_created(plan)
+
+        if command.name == CommandName.APPROVE:
+            try:
+                plan = await editorial_planner.transition_editorial_plan(
+                    db,
+                    entity_id,
+                    EditorialPlanStatus.APPROVED,
+                )
+            except LookupError:
+                return _not_found("Plan", entity_id)
+            except editorial_planner.EditorialPlanTransitionError as exc:
+                return _invalid_transition(str(exc))
+            return _format_plan_updated(plan, verb="approved")
+
+        if command.name == CommandName.DISCARD_PLAN:
+            try:
+                plan = await editorial_planner.transition_editorial_plan(
+                    db,
+                    entity_id,
+                    EditorialPlanStatus.DISCARDED,
+                )
+            except LookupError:
+                return _not_found("Plan", entity_id)
+            except editorial_planner.EditorialPlanTransitionError as exc:
+                return _invalid_transition(str(exc))
+            return _format_plan_updated(plan, verb="discarded")
+
+        if command.name == CommandName.DRAFT:
+            try:
+                draft = await draft_generator.create_persisted_editorial_draft(
+                    db,
+                    entity_id,
+                )
+            except LookupError:
+                return _not_found("Plan", entity_id)
+            except draft_generator.EditorialDraftConflictError as exc:
+                return (
+                    "<b>Draft already exists</b>\n"
+                    f"plan: <code>#{exc.plan_id}</code>\n"
+                    f"draft: <code>#{exc.draft_id}</code>\n"
+                    f"next: /show_draft {exc.draft_id}"
+                )
+            except draft_generator.DraftGenerationStateError as exc:
+                return _invalid_transition(str(exc))
+            return _format_draft_created(draft)
+
+        if command.name == CommandName.SHOW_PLAN:
+            try:
+                plan = await editorial_planner.get_persisted_editorial_plan(
+                    db,
+                    entity_id,
+                )
+            except LookupError:
+                return _not_found("Plan", entity_id)
+            return telegram_formatting.format_plan_summary(plan)
+
+        if command.name == CommandName.SHOW_DRAFT:
+            try:
+                draft = await draft_generator.get_persisted_editorial_draft(
+                    db,
+                    entity_id,
+                )
+            except LookupError:
+                return _not_found("Draft", entity_id)
+            return telegram_formatting.format_draft_summary(draft)
+
+    if command.name == CommandName.PAPERS:
+        candidates = await _discover_refs(
+            db,
+            command.query or "",
+            source_names=("arxiv",),
+            message_id=message_id,
+        )
+        return await _format_query_results(
+            db,
+            heading=f"Papers: {command.query}",
+            candidates=candidates,
+        )
+
+    if command.name == CommandName.NEWS:
+        candidates = await _discover_refs(
+            db,
+            command.query or "",
+            source_names=("hackernews",),
+            message_id=message_id,
+        )
+        return await _format_query_results(
+            db,
+            heading=f"News: {command.query}",
+            candidates=candidates,
+        )
+
+    if command.name == CommandName.SIGNALS:
+        candidates = await _discover_refs(
+            db,
+            command.query or "",
+            message_id=message_id,
+        )
+        return await _format_query_results(
+            db,
+            heading=f"Signals: {command.query}",
+            candidates=candidates,
+        )
+
+    if command.name == CommandName.GITHUB_INSIGHTS:
+        if not settings.priority_github_repo_list:
+            return "<b>GitHub insights</b>\nNo priority repositories configured."
+        candidates = await _github_refs(db, message_id=message_id)
+        return await _format_query_results(
+            db,
+            heading="GitHub insights",
+            candidates=candidates,
+        )
+
+    if command.name == CommandName.WEEKLY:
+        summary = await build_weekly_summary(
+            db,
+            query=settings.weekly_discovery_query,
+            message_id=message_id,
+        )
+        if summary is None:
+            return "<b>Weekly summary</b>\nNo useful signals found this run."
+        return telegram_formatting.format_weekly_summary(summary)
+
+    if command.name == CommandName.MVP_IDEAS:
+        idea = await build_mvp_idea(
+            db,
+            command.query or "",
+            message_id=message_id,
+        )
+        return telegram_formatting.format_mvp_idea(idea)
+
+    return telegram_formatting.format_help()

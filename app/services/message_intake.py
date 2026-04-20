@@ -8,6 +8,7 @@ from app.integrations.telegram_client import download_voice, send_message
 from app.schemas.common import MessageType
 from app.schemas.telegram import TelegramMessage, TelegramUpdate
 from app.services.classifier import MessageClassification, classify, classify_channel
+from app.services.telegram_orchestrator import handle_command, is_command_text
 from app.services.transcription import get_transcriber
 
 logger = logging.getLogger(__name__)
@@ -141,5 +142,15 @@ async def handle_update(
         raw_payload=raw_payload,
     )
 
-    await insert_message(db, domain_msg)
+    persisted_message_id = await insert_message(db, domain_msg)
+    incoming_text = msg.text or msg.caption
+    if is_command_text(incoming_text):
+        response_text = await handle_command(
+            incoming_text or "",
+            db,
+            message_id=persisted_message_id,
+        )
+        await send_message(msg.chat.id, response_text)
+        return
+
     await send_message(msg.chat.id, _ack(c, msg, transcription))

@@ -438,6 +438,8 @@ def _to_persisted_editorial_plan(row: aiosqlite.Row) -> PersistedEditorialPlan:
 async def plan_editorial(
     db: aiosqlite.Connection,
     signal_ids: list[int],
+    *,
+    use_generation: bool = True,
 ) -> EditorialPlan:
     rows = await get_signals_by_ids(db, signal_ids)
     if not rows:
@@ -471,7 +473,7 @@ async def plan_editorial(
         signals=generation_signals,
     )
 
-    generator = get_editorial_generator()
+    generator = get_editorial_generator() if use_generation else None
     llm_used = False
     narrative = (
         await generator.generate(generation_input) if generator is not None else None
