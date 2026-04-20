@@ -112,6 +112,11 @@ _NATURAL_INTENTS: list[tuple[re.Pattern[str], CommandName]] = [
         CommandName.MVP_HANDOFF,
     ),
 ]
+_GREETING_RE = re.compile(
+    r"^(?:hola|hola!|buenas|buenos dias|buen día|buen dia|"
+    r"buenas tardes|buenas noches|hey|hello)\s*$",
+    re.I,
+)
 _FIRST_TOKENS: dict[str, CommandName] = {
     "help": CommandName.HELP,
     "papers": CommandName.PAPERS,
@@ -422,6 +427,13 @@ def _natural_command(
     normalized = _strip_accents(stripped)
     lowered = normalized.lower()
     state = _get_state(chat_id)
+
+    if _GREETING_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__greeting__",
+            raw_text=text,
+        )
 
     if lowered in {"hazlo", "dale", "continua", "continúa", "ok", "si", "sí"}:
         pending = _pending_to_command(state)
@@ -896,10 +908,12 @@ async def handle_command(
     command = parse_command(raw_text)
 
     if command.name == CommandName.HELP or command.name == CommandName.UNKNOWN:
+        if command.name == CommandName.HELP and command.query == "__greeting__":
+            return telegram_formatting.format_greeting()
         if command.name == CommandName.HELP and command.query == "__pending__":
             return _pending_help(_get_state(chat_id))
         if command.name == CommandName.UNKNOWN:
-            return f"<b>Unknown command</b>\n{telegram_formatting.format_help()}"
+            return telegram_formatting.format_soft_unknown(command.raw_text)
         return telegram_formatting.format_help()
 
     if command.name in _QUERY_REQUIRED and not command.query:

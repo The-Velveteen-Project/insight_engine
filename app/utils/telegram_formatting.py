@@ -45,6 +45,43 @@ def format_help() -> str:
     )
 
 
+def format_greeting() -> str:
+    return "\n".join(
+        [
+            "<b>Velveteen Operator</b>",
+            (
+                "Hola, Carlos. Estoy listo para buscar señales, ordenar "
+                "hallazgos y mover una idea hasta plan o draft."
+            ),
+            "",
+            "Puedes decirme cosas como:",
+            "• signals climate risk",
+            "• github_insights",
+            "• weekly",
+            "• qué sigue",
+            "",
+            (
+                "Si ya tienes una señal útil, también puedo convertirla en "
+                "plan y seguir desde ahí."
+            ),
+        ]
+    )
+
+
+def format_soft_unknown(text: str) -> str:
+    return "\n".join(
+        [
+            "<b>No tomé eso como una instrucción operativa</b>",
+            f"Recibí: <code>{escape_text(compact_text(text, 80))}</code>",
+            "Puedo ayudarte mejor si me pides una acción concreta, por ejemplo:",
+            "• signals climate risk",
+            "• github_insights",
+            "• weekly",
+            "• qué sigue",
+        ]
+    )
+
+
 def format_signal_suggestions(
     heading: str,
     suggestions: list[SignalSuggestion],

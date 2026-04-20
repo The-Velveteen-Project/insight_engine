@@ -602,6 +602,15 @@ async def test_handle_operator_text_accepts_bare_help(
     assert "Velveteen Operator" in response
 
 
+async def test_handle_operator_text_greets_naturally(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_operator_text("Hola", db, chat_id=699)
+    assert response is not None
+    assert "Hola, Carlos" in response
+    assert "signals climate risk" in response
+
+
 async def test_handle_operator_text_accepts_bare_signals(
     db: aiosqlite.Connection,
 ) -> None:
@@ -822,6 +831,14 @@ async def test_handle_operator_text_hazlo_without_pending_returns_guidance(
     response = await handle_operator_text("hazlo", db, chat_id=709)
     assert response is not None
     assert "No pending action" in response
+
+
+async def test_handle_command_unknown_returns_soft_guidance(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_command("/esto_no_existe", db)
+    assert "No tomé eso como una instrucción operativa" in response
+    assert "signals climate risk" in response
 
 
 async def test_handle_operator_text_returns_note_capture_ack(
