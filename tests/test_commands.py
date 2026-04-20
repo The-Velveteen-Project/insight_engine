@@ -611,6 +611,15 @@ async def test_handle_operator_text_greets_naturally(
     assert "signals climate risk" in response
 
 
+async def test_handle_operator_text_handles_gratitude_naturally(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_operator_text("gracias", db, chat_id=698)
+    assert response is not None
+    assert "De una" in response
+    assert "último draft" in response
+
+
 async def test_handle_operator_text_accepts_bare_signals(
     db: aiosqlite.Connection,
 ) -> None:
@@ -779,6 +788,28 @@ async def test_handle_operator_text_uses_pending_action_for_hazlo_after_approved
     assert "Draft #10 created" in response
 
 
+async def test_handle_operator_text_sigamos_con_eso_shows_last_draft_when_no_pending(
+    db: aiosqlite.Connection,
+) -> None:
+    persisted = _persisted_draft(12, plan_id=47)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.get_persisted_editorial_draft",
+        new=AsyncMock(return_value=persisted),
+    ):
+        await handle_command("/show_draft 12", db, chat_id=710)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.get_persisted_editorial_draft",
+        new=AsyncMock(return_value=persisted),
+    ) as mock_get:
+        response = await handle_operator_text("sigamos con eso", db, chat_id=710)
+
+    mock_get.assert_awaited_once_with(db, 12)
+    assert response is not None
+    assert "<b>Draft #12</b>" in response
+
+
 async def test_handle_operator_text_que_sigue_returns_pending_hint(
     db: aiosqlite.Connection,
 ) -> None:
@@ -801,6 +832,33 @@ async def test_handle_operator_text_que_sigue_returns_pending_hint(
     assert response is not None
     assert "Next step" in response
     assert f"<code>#{signal_id}</code>" in response
+
+
+async def test_handle_operator_text_returns_short_version_for_last_draft(
+    db: aiosqlite.Connection,
+) -> None:
+    persisted = _persisted_draft(13, plan_id=48)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.get_persisted_editorial_draft",
+        new=AsyncMock(return_value=persisted),
+    ):
+        await handle_command("/show_draft 13", db, chat_id=711)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.get_persisted_editorial_draft",
+        new=AsyncMock(return_value=persisted),
+    ) as mock_get:
+        response = await handle_operator_text(
+            "dame una versión corta",
+            db,
+            chat_id=711,
+        )
+
+    mock_get.assert_awaited_once_with(db, 13)
+    assert response is not None
+    assert "Draft #13 — short version" in response
+    assert "cta:" in response
 
 
 async def test_handle_operator_text_muestramelo_prefers_last_draft(

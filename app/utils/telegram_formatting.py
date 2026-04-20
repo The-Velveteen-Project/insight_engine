@@ -68,6 +68,19 @@ def format_greeting() -> str:
     )
 
 
+def format_gratitude() -> str:
+    return "\n".join(
+        [
+            "<b>De una</b>",
+            "Cuando quieras seguimos.",
+            (
+                "Puedo buscar señales, revisar repos, armar un plan o "
+                "mostrarte el último draft."
+            ),
+        ]
+    )
+
+
 def format_soft_unknown(text: str) -> str:
     return "\n".join(
         [
@@ -82,6 +95,28 @@ def format_soft_unknown(text: str) -> str:
     )
 
 
+def _signal_lead(suggestions: list[SignalSuggestion]) -> str:
+    count = len(suggestions)
+    lead = suggestions[0]
+    if count == 1:
+        return (
+            "Encontré una señal útil. "
+            f"La lectura más sobria por ahora apunta a "
+            f"<code>{escape_text(lead.suggested_action.value)}</code>."
+        )
+    if lead.suggested_action.value == "mvp":
+        return (
+            f"Encontré {count} señales con buena convergencia. "
+            "La más fuerte sí parece justificar una exploración de MVP."
+        )
+    return (
+        f"Encontré {count} señales útiles. "
+        "La más fuerte apunta a "
+        f"<code>{escape_text(lead.suggested_action.value)}</code>, "
+        "no a un MVP todavía."
+    )
+
+
 def format_signal_suggestions(
     heading: str,
     suggestions: list[SignalSuggestion],
@@ -89,7 +124,10 @@ def format_signal_suggestions(
     if not suggestions:
         return f"<b>{escape_text(heading)}</b>\nNo useful signals found."
 
-    lines = [f"<b>{escape_text(heading)}</b>"]
+    lines = [
+        f"<b>{escape_text(heading)}</b>",
+        _signal_lead(suggestions),
+    ]
     for suggestion in suggestions:
         signal_prefix = f"#{suggestion.signal_id} " if suggestion.signal_id else ""
         title_text = escape_text(signal_prefix + compact_text(suggestion.title, 80))
@@ -125,6 +163,12 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
     lines = [
         "<b>Weekly summary</b>",
         f"focus: <code>{escape_text(summary.query)}</code>",
+        (
+            "reading: "
+            f"the strongest line this week looks like "
+            f"<code>{escape_text(summary.editorial_action.value)}</code>, "
+            "with one main angle worth developing."
+        ),
         "signals:",
     ]
     for signal in summary.top_signals:
@@ -216,6 +260,19 @@ def format_plan_summary(
     elif plan.status == EditorialPlanStatus.APPROVED:
         lines.append("you can also say: hazlo")
     return "\n".join(lines)
+
+
+def format_draft_short_version(draft: PersistedEditorialDraft) -> str:
+    content = draft.draft.content
+    return "\n".join(
+        [
+            f"<b>Draft #{draft.draft_id} — short version</b>",
+            f"title: {escape_text(compact_text(content.working_title, 90))}",
+            escape_text(compact_text(content.short_version, 220)),
+            f"cta: {escape_text(compact_text(content.cta, 90))}",
+            "next: if you want, I can show the full draft again",
+        ]
+    )
 
 
 def format_draft_summary(

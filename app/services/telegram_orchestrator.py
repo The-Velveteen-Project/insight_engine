@@ -117,6 +117,10 @@ _GREETING_RE = re.compile(
     r"buenas tardes|buenas noches|hey|hello)\s*$",
     re.I,
 )
+_GRATITUDE_RE = re.compile(
+    r"^(?:gracias|muchas gracias|gracias!|perfecto|perfecto!|buenisimo|buenísimo)\s*$",
+    re.I,
+)
 _FIRST_TOKENS: dict[str, CommandName] = {
     "help": CommandName.HELP,
     "papers": CommandName.PAPERS,
@@ -416,6 +420,25 @@ def _pending_help(state: _ChatState | None) -> str:
     return telegram_formatting.format_help()
 
 
+def _continue_with_state(state: _ChatState | None) -> ParsedTelegramCommand | None:
+    pending = _pending_to_command(state)
+    if pending is not None:
+        return pending
+    if state is not None and state.last_draft_id is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.SHOW_DRAFT,
+            query=str(state.last_draft_id),
+            raw_text="show_draft",
+        )
+    if state is not None and state.last_plan_id is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.SHOW_PLAN,
+            query=str(state.last_plan_id),
+            raw_text="show_plan",
+        )
+    return None
+
+
 def _natural_command(
     text: str,
     *,
@@ -434,11 +457,33 @@ def _natural_command(
             query="__greeting__",
             raw_text=text,
         )
+    if _GRATITUDE_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__gratitude__",
+            raw_text=text,
+        )
 
     if lowered in {"hazlo", "dale", "continua", "continúa", "ok", "si", "sí"}:
-        pending = _pending_to_command(state)
+        pending = _continue_with_state(state)
         if pending is not None:
             return pending
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__pending__",
+            raw_text=text,
+        )
+
+    if lowered in {
+        "sigamos con eso",
+        "sigamos",
+        "continuemos",
+        "dale con eso",
+        "sigue",
+    }:
+        follow_up = _continue_with_state(state)
+        if follow_up is not None:
+            return follow_up
         return ParsedTelegramCommand(
             name=CommandName.HELP,
             query="__pending__",
@@ -451,6 +496,42 @@ def _natural_command(
             query="__pending__",
             raw_text=text,
         )
+
+    if lowered in {
+        "dame una version corta",
+        "dame una versión corta",
+        "version corta",
+        "versión corta",
+        "resumen corto",
+        "short version",
+    }:
+        if state and state.last_draft_id is not None:
+            return ParsedTelegramCommand(
+                name=CommandName.HELP,
+                query="__short_draft__",
+                raw_text=text,
+            )
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__pending__",
+            raw_text=text,
+        )
+
+    if lowered in {"ultimo draft", "último draft", "last draft"}:
+        if state and state.last_draft_id is not None:
+            return ParsedTelegramCommand(
+                name=CommandName.SHOW_DRAFT,
+                query=str(state.last_draft_id),
+                raw_text=text,
+            )
+
+    if lowered in {"ultimo plan", "último plan", "last plan"}:
+        if state and state.last_plan_id is not None:
+            return ParsedTelegramCommand(
+                name=CommandName.SHOW_PLAN,
+                query=str(state.last_plan_id),
+                raw_text=text,
+            )
 
     if lowered in {"muestramelo", "muéstramelo", "show it"}:
         if state and state.last_draft_id is not None:
@@ -910,6 +991,16 @@ async def handle_command(
     if command.name == CommandName.HELP or command.name == CommandName.UNKNOWN:
         if command.name == CommandName.HELP and command.query == "__greeting__":
             return telegram_formatting.format_greeting()
+        if command.name == CommandName.HELP and command.query == "__gratitude__":
+            return telegram_formatting.format_gratitude()
+        if command.name == CommandName.HELP and command.query == "__short_draft__":
+            state = _get_state(chat_id)
+            draft_id = state.last_draft_id if state is not None else None
+            if draft_id is None:
+                return _pending_help(state)
+            draft = await draft_generator.get_persisted_editorial_draft(db, draft_id)
+            _remember_draft(chat_id, draft)
+            return telegram_formatting.format_draft_short_version(draft)
         if command.name == CommandName.HELP and command.query == "__pending__":
             return _pending_help(_get_state(chat_id))
         if command.name == CommandName.UNKNOWN:
