@@ -20,7 +20,10 @@ RUN useradd --create-home --shell /bin/bash appuser \
     && mkdir -p /app/data /data \
     && chown -R appuser:appuser /app /data
 
-USER appuser
+# Railway volumes may be mounted with root ownership. Running the container as
+# root avoids startup failures when SQLite needs to create or open the DB file
+# on a freshly attached volume.
+USER root
 
 EXPOSE 8000
 
