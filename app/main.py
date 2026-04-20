@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api.routes import discovery, editorial, github, health, telegram
+from app.api.routes import discovery, editorial, github, health, internal, telegram
 from app.core.config import settings
 from app.db.session import init_db
 from app.services.scheduler import build_scheduler
@@ -34,6 +34,7 @@ app = FastAPI(
 )
 
 app.include_router(health.router, prefix="/api/v1")
+app.include_router(internal.router, prefix="/api/v1/internal")
 app.include_router(telegram.router, prefix="/api/v1/telegram")
 app.include_router(discovery.router, prefix="/api/v1/discovery")
 app.include_router(github.router, prefix="/api/v1/github")

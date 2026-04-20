@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = ""
     telegram_admin_chat_id: int = 0
     telegram_command_limit: int = 3
+    internal_cron_secret: str = ""
 
     # Phase 3: voice transcription via OpenAI Whisper
     # Phase 6: draft generation — leave empty until needed
@@ -30,6 +31,9 @@ class Settings(BaseSettings):
         "The-Velveteen-Project/StochastoGreen,"
         "The-Velveteen-Project/EcoAgent"
     )
+    # PLANNED: Phase 11 - Supabase migration.
+    # Declared here so deployment configuration can be prepared early,
+    # but not yet wired into runtime persistence.
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_role_key: str = ""

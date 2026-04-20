@@ -107,9 +107,11 @@ async def fetch(query: str, *, max_results: int = 10) -> list[SignalCandidate]:
     )
     url = f"{_BASE_URL}?{params}"
 
+    transport = httpx.AsyncHTTPTransport(retries=2)
     async with httpx.AsyncClient(
         headers={"User-Agent": _USER_AGENT},
         timeout=_TIMEOUT,
+        transport=transport,
     ) as client:
         response = await client.get(url)
         response.raise_for_status()

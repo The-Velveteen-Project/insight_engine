@@ -1,0 +1,56 @@
+name: Weekly Scheduled Jobs
+
+on:
+  schedule:
+    # Weekly summary — Sundays at 09:00 UTC
+    - cron: "0 9 * * 0"
+    # MVP scan — Thursdays at 09:00 UTC
+    - cron: "0 9 * * 4"
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job to run"
+        required: true
+        default: "weekly-summary"
+        type: choice
+        options:
+          - weekly-summary
+          - mvp-scan
+
+jobs:
+  weekly-summary:
+    name: Weekly Summary
+    # Run on Sundays or when manually triggered with weekly-summary
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'weekly-summary' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 9 * * 0')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger weekly summary
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/run-weekly-summary" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 120
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
+
+  mvp-scan:
+    name: MVP Scan
+    # Run on Thursdays or when manually triggered with mvp-scan
+    if: |
+      github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'mvp-scan' ||
+      github.event_name == 'schedule' && startsWith(github.event.schedule, '0 9 * * 4')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger MVP scan
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/run-mvp-scan" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 120
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}
