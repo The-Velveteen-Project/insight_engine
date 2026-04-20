@@ -17,7 +17,6 @@ from app.schemas.commands import (
     WeeklySummary,
 )
 from app.schemas.discovery import SignalCandidate
-from app.services.discovery_service import DiscoveryResult
 from app.schemas.drafts import (
     EditorialDraft,
     EditorialDraftContent,
@@ -34,6 +33,7 @@ from app.schemas.editorial import (
 )
 from app.schemas.github import GitHubInsightCandidate
 from app.schemas.mvp_handoff import MvpHandoffPack, MvpPromptBundle
+from app.services.discovery_service import DiscoveryResult
 from app.services.draft_generator import (
     DraftGenerationStateError,
     EditorialDraftConflictError,
@@ -218,7 +218,9 @@ async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[candidate], normalized_query="climate risk")
+                return_value=DiscoveryResult(
+                    signals=[candidate], normalized_query="climate risk"
+                )
             ),
         ),
         patch(
@@ -231,6 +233,7 @@ async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -
     assert "Papers · climate risk" in response
     assert f"#{signal_id}" in response
     assert "nota técnica" in response
+    assert 'href="https://arxiv.org/abs/2401.10001"' in response
     assert "Para avanzar" in response
 
 
@@ -288,7 +291,9 @@ async def test_build_weekly_summary_returns_actionable_summary(
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[external], normalized_query="climate risk")
+                return_value=DiscoveryResult(
+                    signals=[external], normalized_query="climate risk"
+                )
             ),
         ),
         patch(
@@ -320,7 +325,9 @@ async def test_build_mvp_idea_returns_conservative_non_mvp_when_needed(
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[candidate], normalized_query="health modeling")
+                return_value=DiscoveryResult(
+                    signals=[candidate], normalized_query="health modeling"
+                )
             ),
         ),
         patch(
@@ -409,12 +416,17 @@ def test_format_signal_suggestions_is_conservative_for_weak_evidence() -> None:
                 why_it_matters="Interesting but thin.",
                 suggested_action=RecommendedAction.ARCHIVE,
                 relevance_score=0.34,
+                source_label="arXiv API",
+                url="https://example.com/weak",
             )
         ],
+        normalized_query="membrane technology",
     )
 
-    assert "Sin base fuerte todavía" in text
-    assert "archive" in text
+    assert "Resultados exploratorios" in text
+    assert "Qué haría ahora" in text
+    assert "plan 3" not in text
+    assert 'href="https://example.com/weak"' in text
 
 
 def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None:
@@ -690,7 +702,9 @@ async def test_handle_operator_text_accepts_bare_signals(
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[candidate], normalized_query="climate risk")
+                return_value=DiscoveryResult(
+                    signals=[candidate], normalized_query="climate risk"
+                )
             ),
         ),
         patch(
@@ -721,7 +735,9 @@ async def test_handle_operator_text_uses_chat_memory_for_plan_del_primero(
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[first, second], normalized_query="climate risk")
+                return_value=DiscoveryResult(
+                    signals=[first, second], normalized_query="climate risk"
+                )
             ),
         ),
         patch(
@@ -763,7 +779,9 @@ async def test_handle_operator_text_uses_pending_action_for_hazlo_after_signals(
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[first, second], normalized_query="climate risk")
+                return_value=DiscoveryResult(
+                    signals=[first, second], normalized_query="climate risk"
+                )
             ),
         ),
         patch(
@@ -886,7 +904,9 @@ async def test_handle_operator_text_que_sigue_returns_pending_hint(
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
             new=AsyncMock(
-                return_value=DiscoveryResult(signals=[candidate], normalized_query="climate risk")
+                return_value=DiscoveryResult(
+                    signals=[candidate], normalized_query="climate risk"
+                )
             ),
         ),
         patch(
@@ -898,7 +918,7 @@ async def test_handle_operator_text_que_sigue_returns_pending_hint(
 
     response = await handle_operator_text("qué sigue", db, chat_id=707)
     assert response is not None
-    assert "Next step" in response
+    assert "Siguiente paso" in response
     assert f"<code>#{signal_id}</code>" in response
 
 
@@ -956,7 +976,7 @@ async def test_handle_operator_text_hazlo_without_pending_returns_guidance(
 ) -> None:
     response = await handle_operator_text("hazlo", db, chat_id=709)
     assert response is not None
-    assert "No pending action" in response
+    assert "Sin acción pendiente" in response
 
 
 async def test_handle_command_unknown_returns_soft_guidance(

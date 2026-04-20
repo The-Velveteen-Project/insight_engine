@@ -23,6 +23,9 @@ from app.schemas.editorial import (
 )
 from app.schemas.mvp_handoff import MvpHandoffPack
 
+_SOLID_SIGNAL_THRESHOLD = 0.45
+_WEAK_SIGNAL_THRESHOLD = 0.25
+
 
 def compact_text(text: str, limit: int) -> str:
     compact = " ".join(text.split())
@@ -39,7 +42,10 @@ def format_help() -> str:
     return "\n".join(
         [
             "<b>Velveteen Operator</b>",
-            "Busco señales, armo planes, genero drafts.",
+            (
+                "Busco señales, te muestro links útiles y muevo una idea "
+                "hasta plan o draft."
+            ),
             "",
             "Ejemplos:",
             "• signals membrane filtration",
@@ -59,7 +65,10 @@ def format_greeting() -> str:
     return "\n".join(
         [
             "<b>Velveteen Operator</b>",
-            "Hola, Carlos. Listo.",
+            (
+                "Hola, Carlos. Puedo buscar señales, enseñarte links útiles "
+                "y ordenar una línea hasta plan o draft."
+            ),
             "",
             "Puedes pedirme cosas como:",
             "• signals climate risk",
@@ -101,14 +110,23 @@ def _signal_lead(suggestions: list[SignalSuggestion]) -> str:
     top_score = lead.relevance_score
 
     if action == RecommendedAction.MVP and top_score >= 0.75:
-        return f"{count} señales con buena convergencia. La más fuerte justifica explorar un MVP."
-    if action == RecommendedAction.NOTE and top_score >= 0.45:
+        return (
+            f"Encontré {count} señales con buena convergencia. "
+            "La mejor sí justifica explorar un MVP pequeño."
+        )
+    if action == RecommendedAction.NOTE and top_score >= _SOLID_SIGNAL_THRESHOLD:
         return f"{count} señales. La más fuerte da para una nota técnica."
     if action == RecommendedAction.POST:
         return f"{count} señales. Hay ángulo para un post conciso."
-    if top_score < 0.25:
-        return f"{count} señales, ninguna supera el umbral. Las archivaría por ahora."
-    return f"{count} señales. Sin base fuerte todavía — archivaría de momento."
+    if top_score < _WEAK_SIGNAL_THRESHOLD:
+        return (
+            "No encontré coincidencias sólidas para esta búsqueda. "
+            "Te dejo resultados marginales por si quieres inspeccionarlos."
+        )
+    return (
+        "La búsqueda devolvió algo, pero la base sigue floja. "
+        "No lo tomaría todavía como señal fuerte."
+    )
 
 
 def _signal_take(suggestions: list[SignalSuggestion]) -> str:
@@ -126,7 +144,27 @@ def _signal_take(suggestions: list[SignalSuggestion]) -> str:
         return "Da para un post claro, no para build todavía."
     if mixed and top_score < 0.70:
         return "Señales mezcladas — trataría como note antes que forzar un MVP."
-    return "Lo dejaría en archive por ahora."
+    if top_score < _WEAK_SIGNAL_THRESHOLD:
+        return "Mi lectura: por ahora no la usaría como base editorial."
+    return "Mi lectura: todavía la trataría con mucha cautela."
+
+
+def _signal_link(title: str, url: str | None) -> str:
+    label = escape_text(compact_text(title, 68))
+    if not url:
+        return f"<b>{label}</b>"
+    return f'<a href="{escape_text(url)}"><b>{label}</b></a>'
+
+
+def _render_signal_item(suggestion: SignalSuggestion) -> list[str]:
+    id_prefix = f"#{suggestion.signal_id} " if suggestion.signal_id else ""
+    source = suggestion.source_label or "fuente"
+    title = _signal_link(id_prefix + suggestion.title, suggestion.url)
+    why_text = escape_text(compact_text(suggestion.why_it_matters, 110))
+    return [
+        f"• <code>{escape_text(source)}</code> · {title}",
+        f"  score {suggestion.relevance_score:.2f} · {why_text}",
+    ]
 
 
 def format_signal_suggestions(
@@ -138,23 +176,36 @@ def format_signal_suggestions(
     if not suggestions:
         return format_no_signals(heading, normalized_query)
 
+    top_score = suggestions[0].relevance_score
     lead = _signal_lead(suggestions)
     take = _signal_take(suggestions)
+    lines = [f"<b>{escape_text(heading)}</b>"]
+    nq = normalized_query.strip()
+    if nq:
+        lines.append(f"Búsqueda usada: <code>{escape_text(nq)}</code>")
+    lines.extend([f"{lead} {take}", ""])
 
-    lines = [
-        f"<b>{escape_text(heading)}</b>",
-        f"{lead} {take}",
-        "",
-    ]
-    for s in suggestions:
-        id_prefix = f"#{s.signal_id} " if s.signal_id else ""
-        title_line = escape_text(id_prefix + compact_text(s.title, 72))
-        score_tag = f"({s.relevance_score:.2f}) "
-        why_text = escape_text(compact_text(s.why_it_matters, 100))
-        lines.append(f"• {score_tag}<b>{title_line}</b>")
-        lines.append(f"  {why_text}")
+    visible = suggestions if top_score >= _SOLID_SIGNAL_THRESHOLD else suggestions[:2]
+    lines.append(
+        "Lo más útil:"
+        if top_score >= _SOLID_SIGNAL_THRESHOLD
+        else "Resultados exploratorios:"
+    )
+    for suggestion in visible:
+        lines.extend(_render_signal_item(suggestion))
 
-    first = suggestions[0]
+    if top_score < _SOLID_SIGNAL_THRESHOLD:
+        lines.extend(
+            [
+                "",
+                "Qué haría ahora:",
+                "• reformular la búsqueda con un término más técnico",
+                "• probar papers o news por separado",
+            ]
+        )
+        return "\n".join(lines)
+
+    first = visible[0]
     if first.signal_id is not None:
         action_str = escape_text(_action_label(first.suggested_action))
         lines.extend(
@@ -170,15 +221,18 @@ def format_signal_suggestions(
 def format_no_signals(heading: str, normalized_query: str = "") -> str:
     lines = [
         f"<b>{escape_text(heading)}</b>",
-        "No encontré señales relevantes para este tema.",
+        "No encontré coincidencias útiles para este tema.",
     ]
     nq = normalized_query.strip()
     if nq:
-        lines.append(
-            f"Las fuentes (arXiv, HN) indexan en inglés. "
-            f"La búsqueda fue: <code>{escape_text(nq)}</code>"
-        )
-    lines.append("Prueba ser más específico o usa términos en inglés.")
+        lines.append(f"Probé esta búsqueda: <code>{escape_text(nq)}</code>")
+    lines.extend(
+        [
+            "Qué intentaría ahora:",
+            "• un término más específico",
+            "• papers X o news X por separado",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -218,7 +272,9 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
         (s.signal_id for s in summary.top_signals if s.signal_id is not None), None
     )
     if first_id is not None:
-        lines.append(f"Para continuar: <code>plan {first_id}</code> o <code>weekly</code>")
+        lines.append(
+            f"Para continuar: <code>plan {first_id}</code> o <code>weekly</code>"
+        )
     else:
         lines.append("Para continuar: <code>weekly</code>")
     return "\n".join(lines)
@@ -259,17 +315,12 @@ def format_note_capture_ack(text: str) -> str:
 
 
 def _plan_action_label(plan: PersistedEditorialPlan) -> str:
-    return _action_label(
-        RecommendedAction(plan.proposal.recommended_action.value)
-    )
+    return _action_label(RecommendedAction(plan.proposal.recommended_action.value))
 
 
 def _plan_next_hint(plan: PersistedEditorialPlan) -> str:
     if plan.status == EditorialPlanStatus.DRAFT:
-        return (
-            f"<code>apruébalo</code>  o  "
-            f"<code>discard_plan {plan.plan_id}</code>"
-        )
+        return f"<code>apruébalo</code>  o  <code>discard_plan {plan.plan_id}</code>"
     if plan.status == EditorialPlanStatus.APPROVED:
         if plan.proposal.recommended_action == RecommendedAction.MVP:
             return (

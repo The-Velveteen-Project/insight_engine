@@ -525,7 +525,9 @@ async def test_suggest_endpoint_returns_200(client) -> None:
     with patch(
         "app.api.routes.discovery.discovery_service.discover",
         new=AsyncMock(
-            return_value=DiscoveryResult(signals=[mock_signal], normalized_query="agentic llm")
+            return_value=DiscoveryResult(
+                signals=[mock_signal], normalized_query="agentic llm"
+            )
         ),
     ):
         response = await client.get(

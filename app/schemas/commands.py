@@ -41,6 +41,8 @@ class SignalSuggestion(BaseModel):
     why_it_matters: str
     suggested_action: RecommendedAction
     relevance_score: float
+    source_label: str | None = None
+    url: str | None = None
 
 
 class WeeklySummary(BaseModel):

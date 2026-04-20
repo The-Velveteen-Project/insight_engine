@@ -204,6 +204,7 @@ class _CandidateRef:
     source_type: Literal["arxiv", "hackernews", "github"]
     source_id: str
     title: str
+    url: str
     summary: str
     relevance_score: float
     relevance_note: str
@@ -391,8 +392,8 @@ def _pending_help(state: _ChatState | None) -> str:
     ):
         return "\n".join(
             [
-                "<b>No pending action</b>",
-                "Try one of these:",
+                "<b>Sin acción pendiente</b>",
+                "Puedes probar con:",
                 "• signals climate risk",
                 "• github_insights",
                 "• show_plan 12",
@@ -401,21 +402,21 @@ def _pending_help(state: _ChatState | None) -> str:
 
     if state.pending_command == CommandName.PLAN:
         return (
-            "<b>Next step</b>\n"
-            f"Create a plan from signal <code>#{state.pending_target_id}</code>.\n"
-            "You can say <code>hazlo</code> or <code>plan del primero</code>."
+            "<b>Siguiente paso</b>\n"
+            f"Armar un plan desde la señal <code>#{state.pending_target_id}</code>.\n"
+            "Puedes decir <code>hazlo</code> o <code>plan del primero</code>."
         )
     if state.pending_command == CommandName.APPROVE:
         return (
-            "<b>Next step</b>\n"
-            f"Approve plan <code>#{state.pending_target_id}</code>.\n"
-            "You can say <code>hazlo</code> or <code>apruébalo</code>."
+            "<b>Siguiente paso</b>\n"
+            f"Aprobar el plan <code>#{state.pending_target_id}</code>.\n"
+            "Puedes decir <code>hazlo</code> o <code>apruébalo</code>."
         )
     if state.pending_command == CommandName.DRAFT:
         return (
-            "<b>Next step</b>\n"
-            f"Generate a draft from plan <code>#{state.pending_target_id}</code>.\n"
-            "You can say <code>hazlo</code> or <code>draft</code>."
+            "<b>Siguiente paso</b>\n"
+            f"Sacar un draft del plan <code>#{state.pending_target_id}</code>.\n"
+            "Puedes decir <code>hazlo</code> o <code>draft</code>."
         )
     return telegram_formatting.format_help()
 
@@ -618,6 +619,7 @@ def _candidate_ref(
             source_type=candidate.source_type,
             source_id=candidate.source_id,
             title=candidate.title,
+            url=str(candidate.url),
             summary=candidate.summary,
             relevance_score=candidate.relevance_score,
             relevance_note=candidate.relevance_note,
@@ -626,6 +628,7 @@ def _candidate_ref(
         source_type="github",
         source_id=candidate.source_id,
         title=candidate.title,
+        url=candidate.url,
         summary=candidate.summary,
         relevance_score=candidate.relevance_score,
         relevance_note=candidate.relevance_note,
@@ -675,6 +678,8 @@ async def _candidate_to_suggestion(
         why_it_matters=why_it_matters,
         suggested_action=suggested_action,
         relevance_score=candidate.relevance_score,
+        source_label=_DISCOVERY_LABELS[candidate.source_type],
+        url=candidate.url,
     )
 
 
@@ -942,11 +947,8 @@ async def build_mvp_idea(
 
 
 def _query_heading(label: str, raw_query: str, normalized_query: str) -> str:
-    """Build a heading that shows the translated query when it differs."""
-    nq = normalized_query.strip()
+    """Build a heading centered on the founder's original query."""
     rq = raw_query.strip()
-    if nq and nq.lower() != rq.lower():
-        return f"{label} · {nq} [{rq}]"
     return f"{label} · {rq}"
 
 

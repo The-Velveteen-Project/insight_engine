@@ -57,8 +57,14 @@ The project now has a clear split:
   - editorial planning
   - draft generation
   - conservative MVP handoff preparation
+- **a few narrow model-backed utilities**
+  - query normalization for external search
+  - structured editorial writing
+  - structured draft writing
 
 That means the system is no longer just “a bot with slash commands”. The visible goal is an operator that can search, suggest, summarize, and move work forward inside the chat while still relying on persisted state and deterministic rules.
+
+Most of the runtime is still deterministic. Not every internal role is a free-form “agent”, and that is deliberate.
 
 ## Agent Model
 
@@ -76,13 +82,17 @@ Responsibilities:
 
 ### 2. Discovery Scout
 
-Mostly deterministic.
+Mostly deterministic retrieval and ranking.
 
 Responsibilities:
 
+- normalize non-English queries into compact English search terms before hitting external APIs
 - fetch signals from arXiv and Hacker News
 - fetch portfolio signals from priority GitHub repos
 - rank and persist useful signals
+- gate relevance scoring by query match first, profile fit second
+
+The query normalizer is a narrow utility, not a planner. If it fails, discovery falls back to the raw user query.
 
 ### 3. Editorial Strategist
 
@@ -120,6 +130,25 @@ Responsibilities:
 - keep scope narrow and testable
 
 It does **not** auto-build the MVP yet. It prepares the next serious step.
+
+## Prompt-Bearing Components
+
+Only a subset of the system uses prompts today:
+
+- `Velveteen Operator`
+  - mostly deterministic routing + short-lived chat state
+  - tone is shaped mainly by formatter and orchestration logic, not free-form generation
+- `Discovery Scout`
+  - deterministic retrieval and scoring
+  - uses a narrow normalization prompt for English search reformulation when Anthropic is configured
+- `Editorial Strategist`
+  - structured generation over already-filtered signals
+  - cannot change the deterministic `recommended_action`
+- `Draft Writer`
+  - structured generation over an already-approved plan
+  - keeps the same schema whether the LLM succeeds or fallback is used
+
+This distinction matters: the product behaves like an operator shell, but the core still avoids handing business logic to an LLM.
 
 ## Context Kernel
 
@@ -179,11 +208,21 @@ flowchart TB
     subgraph CORE["Internal Services"]
         INTAKE["message_intake.py\npersist + classify + route"]
         CTX["Context Hub\nstatic Velveteen context\n+ dynamic DB snapshot"]
-        DISC["Discovery Scout\narXiv + Hacker News + GitHub signals"]
+        DISC["Discovery Scout\ndeterministic retrieval + ranking"]
         PLAN["Editorial Strategist\nheuristic action selection\narchive | note | post | mvp"]
         DRAFT["Draft Writer\napproved plan -> structured draft"]
         HAND["MVP Handoff Builder\narchitect -> builder -> auditor prompt pack"]
-        SCHED["Local Scheduler\nweekly summary + MVP scan"]
+        JOBS["Job runners\nweekly summary + MVP scan"]
+    end
+
+    subgraph UTIL["Narrow Utilities"]
+        NORM["Query Normalizer\nnon-fatal EN normalization"]
+        INT["Internal cron routes\nPOST /api/v1/internal/..."]
+    end
+
+    subgraph AUTO["Automation"]
+        GHA["⏱️ GitHub Actions\nscheduled weekly jobs"]
+        LS["Local Scheduler\nlocal fallback only"]
     end
 
     subgraph DB["SQLite"]
@@ -198,6 +237,7 @@ flowchart TB
         HN["📰 Hacker News Algolia"]
         GIT["🐙 GitHub REST API"]
         OAI["🤖 OpenAI API"]
+        ANT["🤖 Anthropic API\n(Claude Haiku)"]
     end
 
     U --> TG
@@ -217,9 +257,15 @@ flowchart TB
     API --> PLAN
     API --> DRAFT
     API --> HAND
+    API --> INT
 
-    SCHED --> OP
+    GHA --> INT
+    LS --> JOBS
+    INT --> JOBS
+    JOBS --> TG
 
+    DISC --> NORM
+    NORM --> ANT
     DISC --> ARX
     DISC --> HN
     DISC --> GIT
@@ -239,7 +285,12 @@ flowchart TB
 
 ## Current Telegram UX
 
-The Telegram layer supports both explicit slash commands and a small amount of natural-language routing.
+The Telegram layer is now Spanish-first, compact, and more operator-like than menu-like.
+
+It supports both:
+
+- natural-language routing
+- explicit slash commands for “expert mode”
 
 Examples that work today:
 
@@ -311,7 +362,7 @@ The important part is that Telegram does **not** bypass the persisted workflow. 
 
 - `GET /api/v1/discovery/suggest`
 
-This endpoint is stateful: it discovers, ranks, persists signals, and then responds.
+This endpoint is stateful: it normalizes the query if needed, discovers, ranks, persists signals, and then responds.
 
 ### GitHub insights
 
@@ -338,6 +389,13 @@ This endpoint is also stateful: it suggests insights and persists them to `signa
 - `GET /api/v1/editorial/plans/{id}/mvp-handoff`
 
 This route returns a structured handoff pack only when the persisted plan has `recommended_action = mvp`.
+
+### Internal cron routes
+
+- `POST /api/v1/internal/run-weekly-summary`
+- `POST /api/v1/internal/run-mvp-scan`
+
+These routes are authenticated with `X-Internal-Token` and are meant for production schedulers such as GitHub Actions.
 
 ## Project Structure
 
@@ -435,9 +493,11 @@ The repository now includes:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
 - `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY` if you want query normalization for multilingual discovery
 - `GITHUB_TOKEN`
-- `ENABLE_SCHEDULER`
+- `ENABLE_SCHEDULER=false`
 - `TELEGRAM_ADMIN_CHAT_ID`
+- `INTERNAL_CRON_SECRET`
 
 ### SQLite on Railway
 
@@ -448,6 +508,26 @@ DB_PATH=/data/engine.db
 ```
 
 Without a mounted volume, SQLite state will be ephemeral across deploys.
+
+### Production scheduling
+
+In production, the recommended setup is:
+
+- Railway for the web service
+- GitHub Actions for scheduled weekly jobs
+- internal authenticated routes for cron execution
+
+That means:
+
+- keep `ENABLE_SCHEDULER=false` in Railway
+- set GitHub Actions secrets:
+  - `APP_URL`
+  - `INTERNAL_CRON_SECRET`
+- let the workflow call:
+  - `POST /api/v1/internal/run-weekly-summary`
+  - `POST /api/v1/internal/run-mvp-scan`
+
+The local in-process scheduler remains useful for development, but it is no longer the production source of truth.
 
 ### Telegram after deploy
 
@@ -493,12 +573,13 @@ Today it already behaves like:
 - an operator shell in Telegram
 - a persisted editorial workflow
 - a conservative discovery engine
+- a multilingual discovery layer with non-fatal query normalization
 - a human-in-the-loop planning system
 - a draft generator that does not bypass approval
 
 The immediate next product step is:
 
-- make Telegram feel more like a real operator shell and less like a command bot
+- keep tightening Telegram continuity so the operator feels even less like a command bot
 - then move persistence from local-first SQLite toward Supabase-backed production state
 
 Still intentionally out of scope:
