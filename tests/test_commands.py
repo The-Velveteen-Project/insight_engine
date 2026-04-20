@@ -210,6 +210,18 @@ async def test_handle_command_help_returns_guide(db: aiosqlite.Connection) -> No
     assert "weekly" in response
 
 
+async def test_handle_command_start_returns_velveteen_onboarding(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_command("/start", db)
+    assert "🐇" in response
+    assert "Hola, Carlos" in response
+    assert "Qué soy" in response
+    assert "Qué no soy" in response
+    assert "Cómo usarme" in response
+    assert "Lo que pienso de Velveteen" in response
+
+
 async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -> None:
     candidate = _signal_candidate("2401.10001", "Climate risk paper")
     signal_id = await _persist_signal(db, candidate)
@@ -439,6 +451,8 @@ def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None
                 why_it_matters="Useful but not decisive.",
                 suggested_action=RecommendedAction.POST,
                 relevance_score=0.62,
+                source_label="Hacker News Algolia",
+                url="https://example.com/first",
             ),
             SignalSuggestion(
                 signal_id=9,
@@ -446,6 +460,8 @@ def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None
                 why_it_matters="Useful but mixed.",
                 suggested_action=RecommendedAction.ARCHIVE,
                 relevance_score=0.58,
+                source_label="arXiv API",
+                url="https://example.com/second",
             ),
             SignalSuggestion(
                 signal_id=10,
@@ -453,12 +469,29 @@ def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None
                 why_it_matters="More technical than public.",
                 suggested_action=RecommendedAction.NOTE,
                 relevance_score=0.56,
+                source_label="GitHub REST",
+                url="https://example.com/third",
             ),
         ],
     )
 
     assert "señales" in text
     assert "post" in text
+    assert "abrir fuente" in text
+
+
+def test_format_plan_summary_shows_angle_not_only_why() -> None:
+    persisted = _persisted_plan(
+        70,
+        signal_ids=[5, 8],
+        action=RecommendedAction.POST,
+        status=EditorialPlanStatus.DRAFT,
+    )
+
+    text = telegram_formatting.format_plan_summary(persisted)
+
+    assert "Ángulo:" in text
+    assert "Use the signal to frame one concrete technical angle" in text
 
 
 async def test_handle_command_plan_creates_persisted_plan(

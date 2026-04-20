@@ -12,6 +12,7 @@ from app.schemas.editorial import RecommendedAction
 
 
 class CommandName(StrEnum):
+    START = "start"
     PAPERS = "papers"
     NEWS = "news"
     SIGNALS = "signals"

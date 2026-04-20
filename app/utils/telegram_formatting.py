@@ -38,6 +38,10 @@ def escape_text(text: str) -> str:
     return escape(text, quote=False)
 
 
+def _readable_text(text: str, *, limit: int = 220) -> str:
+    return escape_text(compact_text(text, limit))
+
+
 def format_help() -> str:
     return "\n".join(
         [
@@ -48,6 +52,7 @@ def format_help() -> str:
             ),
             "",
             "Ejemplos:",
+            "• /start",
             "• signals membrane filtration",
             "• papers dengue surveillance",
             "• github_insights",
@@ -80,6 +85,113 @@ def format_greeting() -> str:
     )
 
 
+def format_start_message() -> str:
+    return "\n".join(
+        [
+            "🐇 <b>Velveteen Operator</b>",
+            "Hola, Carlos.",
+            "",
+            (
+                "Soy la capa operativa de The Velveteen Project. No existo solo "
+                "para listar noticias o sacar drafts: existo para ayudarte a unir "
+                "lo que investigas, lo que construyes y lo que intuyes en una sola "
+                "línea de trabajo con criterio."
+            ),
+            "",
+            "<b>Qué soy</b>",
+            (
+                "Soy un operador editorial y de portafolio para un applied decision "
+                "systems lab founder-led. Mi trabajo es convertir fragmentos dispersos "
+                "en continuidad útil."
+            ),
+            (
+                "Eso incluye señales externas, papers, actividad de repos, notas, "
+                "clases, intuiciones técnicas y posibles builds."
+            ),
+            "No reemplazo criterio. Lo organizo.",
+            "",
+            "<b>Qué hago bien</b>",
+            "• buscar papers, news y señales mixtas sin perder el foco",
+            "• conectar lo que aparece afuera con tus repos y tu línea de trabajo",
+            "• ayudarte a decidir si algo debe ir a archive, note, post o MVP",
+            "• mover una señal prometedora hasta plan, aprobación y draft",
+            "• decirte con honestidad cuando la base todavía no da",
+            "",
+            "<b>Qué no soy</b>",
+            "• no soy un feed reader con maquillaje",
+            "• no soy una fábrica de posts vacíos",
+            "• no soy un generador de MVPs por ansiedad",
+            "• no publico por ti ni tomo decisiones humanas finales",
+            "",
+            "<b>Limitaciones</b>",
+            (
+                "Dependo de lo que devuelvan las APIs externas y de la calidad "
+                "de la búsqueda. Si el tema entra ambiguo, el resultado "
+                "también puede salirlo."
+            ),
+            (
+                "Un draft útil sigue necesitando tu revisión. Y si una búsqueda "
+                "es débil, prefiero decirlo antes que fingir relevancia."
+            ),
+            "",
+            "<b>Cómo usarme</b>",
+            (
+                "Puedes tratarme como operador, no solo como bot de comandos. "
+                "Sirven cosas como:"
+            ),
+            "• signals membrane filtration",
+            "• papers dengue surveillance",
+            "• github_insights",
+            "• weekly",
+            "• hazme un plan del primero",
+            "• apruébalo",
+            "• draft",
+            "",
+            (
+                "Pero también puedes usarme así:"
+            ),
+            "• quiero entender si esto da para una note o un MVP",
+            "• cruza esta idea con lo que estamos construyendo en GitHub",
+            "• busca señales sobre este tema y dime qué harías tú",
+            "• ayúdame a convertir esta intuición en una línea de trabajo",
+            "",
+            "<b>Cómo sacarme más valor</b>",
+            (
+                "Funciono mejor cuando me das temas concretos, tensiones reales "
+                "o piezas que valga la pena conectar: una observación, una nota "
+                "de clase, un repo, un paper, una noticia, una sospecha."
+            ),
+            (
+                "Si quieres rendimiento alto, no me uses solo para buscar. Úsame para "
+                "sintetizar: mundo exterior + trabajo propio + identidad de Velveteen."
+            ),
+            "",
+            "<b>Mi recomendación</b>",
+            (
+                "No empieces por el draft. Empieza por una línea de "
+                "investigación o por una señal que de verdad te intrigue. "
+                "Yo te ayudo a ver si eso debe vivir como note, post, "
+                "archive o MVP."
+            ),
+            "",
+            "<b>Lo que pienso de Velveteen</b>",
+            (
+                "Velveteen es más interesante cuando no separa teoría, software "
+                "y voz. Su fuerza no está en parecer grande, sino en hacer "
+                "visible una forma de pensar: rigurosa, aplicada, técnica y "
+                "usable. Mi trabajo es ayudarte a hacer esa amalgama sin "
+                "perder precisión."
+            ),
+            "",
+            (
+                "Si quieres, empezamos por aquí: <code>weekly</code>, "
+                "<code>signals climate risk</code> o simplemente una idea tuya "
+                "en lenguaje natural."
+            ),
+        ]
+    )
+
+
 def format_gratitude() -> str:
     return "Cuando quieras seguimos."
 
@@ -87,7 +199,7 @@ def format_gratitude() -> str:
 def format_soft_unknown(text: str) -> str:
     return "\n".join(
         [
-            f"No entendí eso: <code>{escape_text(compact_text(text, 70))}</code>",
+            f"No entendí eso: <code>{escape_text(compact_text(text, 120))}</code>",
             "Prueba con: signals X · papers X · github_insights · weekly",
         ]
     )
@@ -150,7 +262,7 @@ def _signal_take(suggestions: list[SignalSuggestion]) -> str:
 
 
 def _signal_link(title: str, url: str | None) -> str:
-    label = escape_text(compact_text(title, 68))
+    label = escape_text(compact_text(title, 160))
     if not url:
         return f"<b>{label}</b>"
     return f'<a href="{escape_text(url)}"><b>{label}</b></a>'
@@ -160,11 +272,15 @@ def _render_signal_item(suggestion: SignalSuggestion) -> list[str]:
     id_prefix = f"#{suggestion.signal_id} " if suggestion.signal_id else ""
     source = suggestion.source_label or "fuente"
     title = _signal_link(id_prefix + suggestion.title, suggestion.url)
-    why_text = escape_text(compact_text(suggestion.why_it_matters, 110))
-    return [
+    why_text = _readable_text(suggestion.why_it_matters, limit=220)
+    lines = [
         f"• <code>{escape_text(source)}</code> · {title}",
-        f"  score {suggestion.relevance_score:.2f} · {why_text}",
+        f"  score {suggestion.relevance_score:.2f}",
+        f"  {why_text}",
     ]
+    if suggestion.url:
+        lines.append(f'  ↗ <a href="{escape_text(suggestion.url)}">abrir fuente</a>')
+    return lines
 
 
 def format_signal_suggestions(
@@ -256,15 +372,15 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
     ]
     for signal in summary.top_signals:
         prefix = f"#{signal.signal_id} " if signal.signal_id else ""
-        lines.append(f"• {escape_text(prefix + compact_text(signal.title, 70))}")
+        lines.append(f"• {escape_text(prefix + compact_text(signal.title, 140))}")
     lines.extend(
         [
             "",
             f"Editorial: <code>{escape_text(action_label)}</code>"
-            f" — {escape_text(compact_text(summary.editorial_angle, 90))}",
+            f" — {_readable_text(summary.editorial_angle, limit=180)}",
             f"MVP: <code>{escape_text(summary.mvp_action.value)}</code>"
-            f" — {escape_text(compact_text(summary.mvp_summary, 90))}",
-            f"Próximo: {escape_text(compact_text(summary.next_step, 100))}",
+            f" — {_readable_text(summary.mvp_summary, limit=180)}",
+            f"Próximo: {_readable_text(summary.next_step, limit=180)}",
             "",
         ]
     )
@@ -289,8 +405,8 @@ def format_mvp_idea(idea: MvpIdeaSuggestion) -> str:
         f"Query: <code>{escape_text(idea.query)}</code>",
         f"Decisión: <code>{escape_text(idea.recommended_action.value)}</code> — {take}",
         "",
-        f"{escape_text(compact_text(idea.thesis, 110))}",
-        f"{escape_text(compact_text(idea.why_it_matters, 110))}",
+        _readable_text(idea.thesis, limit=220),
+        _readable_text(idea.why_it_matters, limit=220),
         "",
         f"Fuentes: {escape_text(', '.join(idea.possible_sources))}",
         f"Señales: <code>{signal_text}</code>",
@@ -304,7 +420,7 @@ def format_note_capture_ack(text: str) -> str:
     return "\n".join(
         [
             "Registrado.",
-            f"<code>{escape_text(compact_text(text, 120))}</code>",
+            f"<code>{escape_text(compact_text(text, 220))}</code>",
             "",
             "Rutas posibles:",
             "• <code>signals</code> sobre este tema",
@@ -342,7 +458,7 @@ def format_plan_summary(
     signal_text = ", ".join(f"#{s}" for s in proposal.signal_ids)
     header = heading or f"Plan #{plan.plan_id}"
     action_str = escape_text(_plan_action_label(plan))
-    why_text = escape_text(compact_text(proposal.why_it_matters, 120))
+    why_text = _readable_text(proposal.why_it_matters, limit=260)
     lines = [
         f"<b>{escape_text(header)}</b>",
         f"<code>{escape_text(plan.status.value)}</code> · "
@@ -350,6 +466,8 @@ def format_plan_summary(
         f"Señales: <code>{escape_text(signal_text)}</code>",
         "",
         why_text,
+        "",
+        f"Ángulo: {_readable_text(proposal.angle, limit=200)}",
         "",
         _plan_next_hint(plan),
     ]
@@ -361,11 +479,11 @@ def format_draft_short_version(draft: PersistedEditorialDraft) -> str:
     return "\n".join(
         [
             f"<b>Draft #{draft.draft_id} — versión corta</b>",
-            f"<i>{escape_text(compact_text(content.working_title, 90))}</i>",
+            f"<i>{_readable_text(content.working_title, limit=180)}</i>",
             "",
-            escape_text(compact_text(content.short_version, 220)),
+            _readable_text(content.short_version, limit=500),
             "",
-            f"CTA: {escape_text(compact_text(content.cta, 90))}",
+            f"CTA: {_readable_text(content.cta, limit=180)}",
         ]
     )
 
@@ -381,10 +499,10 @@ def format_draft_summary(
         f"<b>{escape_text(header)}</b>",
         f"<code>{escape_text(draft.status.value)}</code> · plan #{draft.plan_id}",
         "",
-        f"<i>{escape_text(compact_text(content.working_title, 90))}</i>",
-        escape_text(compact_text(content.short_version, 160)),
+        f"<i>{_readable_text(content.working_title, limit=180)}</i>",
+        _readable_text(content.short_version, limit=320),
         "",
-        f"CTA: {escape_text(compact_text(content.cta, 90))}",
+        f"CTA: {_readable_text(content.cta, limit=180)}",
         "",
         "Para ver completo: <code>muéstramelo</code>",
     ]
@@ -397,8 +515,8 @@ def format_mvp_handoff_summary(pack: MvpHandoffPack) -> str:
         "<b>MVP handoff listo</b>",
         f"Plan: <code>#{pack.plan_id}</code> · señales: <code>{signal_text}</code>",
         "",
-        escape_text(compact_text(pack.thesis, 110)),
-        escape_text(compact_text(pack.scope_summary, 120)),
+        _readable_text(pack.thesis, limit=220),
+        _readable_text(pack.scope_summary, limit=260),
         "",
         f"Builder: <code>{escape_text(pack.builder_target)}</code>",
         f"Auditor: <code>{escape_text(pack.auditor_target)}</code>",

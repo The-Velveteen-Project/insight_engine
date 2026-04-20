@@ -122,6 +122,7 @@ _GRATITUDE_RE = re.compile(
     re.I,
 )
 _FIRST_TOKENS: dict[str, CommandName] = {
+    "start": CommandName.START,
     "help": CommandName.HELP,
     "papers": CommandName.PAPERS,
     "paper": CommandName.PAPERS,
@@ -1004,6 +1005,9 @@ async def handle_command(
     chat_id: int | None = None,
 ) -> str:
     command = parse_command(raw_text)
+
+    if command.name == CommandName.START:
+        return telegram_formatting.format_start_message()
 
     if command.name == CommandName.HELP or command.name == CommandName.UNKNOWN:
         if command.name == CommandName.HELP and command.query == "__greeting__":
