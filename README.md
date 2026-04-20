@@ -78,7 +78,7 @@ Responsibilities:
 - keep short-lived chat context
 - route to the right internal service
 - suggest the next reasonable step
-- keep responses compact and sober
+- keep responses clear, sober, and genuinely useful
 
 ### 2. Discovery Scout
 
@@ -86,7 +86,7 @@ Mostly deterministic retrieval and ranking.
 
 Responsibilities:
 
-- normalize non-English queries into compact English search terms before hitting external APIs
+- normalize non-English queries into usable English search terms before hitting external APIs
 - fetch signals from arXiv and Hacker News
 - fetch portfolio signals from priority GitHub repos
 - rank and persist useful signals
@@ -285,7 +285,14 @@ flowchart TB
 
 ## Current Telegram UX
 
-The Telegram layer is now Spanish-first, compact, and more operator-like than menu-like.
+The Telegram layer is now Spanish-first, readability-first, and more operator-like than menu-like.
+
+The goal is not to compress everything into tiny bot messages. The goal is:
+
+- enough context to understand what was found
+- visible links when they matter
+- honest handling of weak evidence
+- and next steps that help Carlos think, not just click commands
 
 It supports both:
 
@@ -294,6 +301,7 @@ It supports both:
 
 Examples that work today:
 
+- `/start`
 - `help`
 - `/help`
 - `signals climate risk`
@@ -309,6 +317,12 @@ Examples that work today:
 - `mvp_handoff 5`
 
 The important part is that Telegram does **not** bypass the persisted workflow. It is a shell over it.
+
+In practice, that means:
+
+- strong results should feel readable, not cryptic
+- weak results should be labeled as exploratory instead of overstated
+- and long titles, links, or summaries should only be shortened when they truly hurt comprehension
 
 ## Main Working Loops
 
@@ -549,16 +563,17 @@ make typecheck
 
 The smallest end-to-end demo is:
 
-1. `signals climate risk`
-2. `hazme un plan del primero`
-3. `show_plan <plan_id>`
-4. `approve <plan_id>`
-5. `draft <plan_id>`
-6. `show_draft <draft_id>`
+1. `/start`
+2. `signals climate risk`
+3. `hazme un plan del primero`
+4. `show_plan <plan_id>`
+5. `approve <plan_id>`
+6. `draft <plan_id>`
+7. `show_draft <draft_id>`
 
 If the plan lands on `mvp`, then:
 
-7. `mvp_handoff <plan_id>`
+8. `mvp_handoff <plan_id>`
 
 That demonstrates the real product loop:
 
