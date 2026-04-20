@@ -68,7 +68,7 @@ async def test_run_weekly_summary_job_sends_message(monkeypatch) -> None:
 
     mock_send.assert_awaited_once()
     assert mock_send.await_args.args[0] == 1234
-    assert "Weekly summary" in mock_send.await_args.args[1]
+    assert "Resumen semanal" in mock_send.await_args.args[1]
 
 
 async def test_run_weekly_mvp_scan_job_sends_message(monkeypatch) -> None:
@@ -104,7 +104,7 @@ async def test_run_weekly_mvp_scan_job_sends_message(monkeypatch) -> None:
 
     mock_send.assert_awaited_once()
     assert mock_send.await_args.args[0] == 1234
-    assert "MVP idea" in mock_send.await_args.args[1]
+    assert "Ideas de MVP" in mock_send.await_args.args[1]
 
 
 def test_build_scheduler_returns_none_when_disabled(monkeypatch) -> None:

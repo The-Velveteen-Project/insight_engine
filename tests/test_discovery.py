@@ -25,7 +25,7 @@ from app.integrations.arxiv_client import _parse_feed
 from app.integrations.hn_client import _parse_hits
 from app.schemas.discovery import SignalCandidate
 from app.services import relevance_ranker
-from app.services.discovery_service import _dedup, _score, discover
+from app.services.discovery_service import DiscoveryResult, _dedup, _score, discover
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -294,6 +294,10 @@ async def test_discover_persists_to_db(db: aiosqlite.Connection) -> None:
 
     with (
         patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="machine learning"),
+        ),
+        patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(return_value=mock_candidates),
         ),
@@ -302,11 +306,11 @@ async def test_discover_persists_to_db(db: aiosqlite.Connection) -> None:
             new=AsyncMock(return_value=[]),
         ),
     ):
-        results = await discover("machine learning", db, limit=3)
+        result = await discover("machine learning", db, limit=3)
 
-    assert len(results) == 2
+    assert len(result.signals) == 2
     # All results should have been scored
-    for r in results:
+    for r in result.signals:
         assert r.relevance_score >= 0.0
         assert r.relevance_note != ""
 
@@ -325,6 +329,10 @@ async def test_discover_respects_limit(db: aiosqlite.Connection) -> None:
 
     with (
         patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="anything"),
+        ),
+        patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(return_value=mock_candidates),
         ),
@@ -333,9 +341,9 @@ async def test_discover_respects_limit(db: aiosqlite.Connection) -> None:
             new=AsyncMock(return_value=[]),
         ),
     ):
-        results = await discover("anything", db, limit=3)
+        result = await discover("anything", db, limit=3)
 
-    assert len(results) == 3
+    assert len(result.signals) == 3
 
 
 async def test_discover_persists_message_link_when_provided(
@@ -352,6 +360,10 @@ async def test_discover_persists_message_link_when_provided(
     )
 
     with (
+        patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="health ai"),
+        ),
         patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(
@@ -395,6 +407,10 @@ async def test_discover_refreshes_existing_signal_instead_of_duplicating(
 
     with (
         patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="systems"),
+        ),
+        patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(return_value=[initial]),
         ),
@@ -406,6 +422,10 @@ async def test_discover_refreshes_existing_signal_instead_of_duplicating(
         await discover("systems", db, limit=1)
 
     with (
+        patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="climate risk"),
+        ),
         patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(return_value=[refreshed]),
@@ -443,6 +463,10 @@ async def test_discover_source_failure_is_isolated(db: aiosqlite.Connection) -> 
 
     with (
         patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="llm"),
+        ),
+        patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(side_effect=RuntimeError("network error")),
         ),
@@ -451,10 +475,10 @@ async def test_discover_source_failure_is_isolated(db: aiosqlite.Connection) -> 
             new=AsyncMock(return_value=[hn_candidate]),
         ),
     ):
-        results = await discover("llm", db, limit=3)
+        result = await discover("llm", db, limit=3)
 
-    assert len(results) == 1
-    assert results[0].source_id == "hn_001"
+    assert len(result.signals) == 1
+    assert result.signals[0].source_id == "hn_001"
 
 
 async def test_discover_deduplicates_across_sources(db: aiosqlite.Connection) -> None:
@@ -465,6 +489,10 @@ async def test_discover_deduplicates_across_sources(db: aiosqlite.Connection) ->
 
     with (
         patch(
+            "app.services.discovery_service.normalize_query",
+            new=AsyncMock(return_value="anything"),
+        ),
+        patch(
             "app.services.discovery_service.arxiv_client.fetch",
             new=AsyncMock(return_value=[from_arxiv]),
         ),
@@ -473,9 +501,9 @@ async def test_discover_deduplicates_across_sources(db: aiosqlite.Connection) ->
             new=AsyncMock(return_value=[from_hn]),
         ),
     ):
-        results = await discover("anything", db, limit=5)
+        result = await discover("anything", db, limit=5)
 
-    assert len(results) == 1
+    assert len(result.signals) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +524,9 @@ async def test_suggest_endpoint_returns_200(client) -> None:
 
     with patch(
         "app.api.routes.discovery.discovery_service.discover",
-        new=AsyncMock(return_value=[mock_signal]),
+        new=AsyncMock(
+            return_value=DiscoveryResult(signals=[mock_signal], normalized_query="agentic llm")
+        ),
     ):
         response = await client.get(
             "/api/v1/discovery/suggest", params={"q": "agentic llm", "limit": 1}
@@ -523,7 +553,7 @@ async def test_suggest_endpoint_rejects_empty_query(client) -> None:
 async def test_suggest_endpoint_default_limit(client) -> None:
     with patch(
         "app.api.routes.discovery.discovery_service.discover",
-        new=AsyncMock(return_value=[]),
+        new=AsyncMock(return_value=DiscoveryResult(signals=[], normalized_query="")),
     ) as mock_discover:
         await client.get("/api/v1/discovery/suggest", params={"q": "machine learning"})
 
@@ -535,7 +565,7 @@ async def test_suggest_endpoint_default_limit(client) -> None:
 async def test_suggest_endpoint_passes_message_id(client) -> None:
     with patch(
         "app.api.routes.discovery.discovery_service.discover",
-        new=AsyncMock(return_value=[]),
+        new=AsyncMock(return_value=DiscoveryResult(signals=[], normalized_query="")),
     ) as mock_discover:
         await client.get(
             "/api/v1/discovery/suggest",

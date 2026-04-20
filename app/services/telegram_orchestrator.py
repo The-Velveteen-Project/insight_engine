@@ -702,20 +702,21 @@ async def _discover_refs(
     *,
     source_names: tuple[str, ...] | None = None,
     message_id: int | None = None,
-) -> list[_CandidateRef]:
+) -> tuple[list[_CandidateRef], str]:
+    """Returns (candidate_refs, normalized_query)."""
     sources = (
         discovery_service.get_sources_by_name(source_names)
         if source_names is not None
         else None
     )
-    candidates = await discovery_service.discover(
+    result = await discovery_service.discover(
         query,
         db,
         limit=settings.telegram_command_limit,
         message_id=message_id,
         sources=sources,
     )
-    return [_candidate_ref(candidate) for candidate in candidates]
+    return [_candidate_ref(c) for c in result.signals], result.normalized_query
 
 
 async def _github_refs(
@@ -820,7 +821,7 @@ async def build_weekly_summary(
     message_id: int | None = None,
 ) -> WeeklySummary | None:
     resolved_query = query or settings.weekly_discovery_query
-    external = await _discover_refs(db, resolved_query, message_id=message_id)
+    external, _ = await _discover_refs(db, resolved_query, message_id=message_id)
     github_refs = await _github_refs(db, message_id=message_id)
     combined = sorted(
         external + github_refs,
@@ -862,7 +863,7 @@ async def build_mvp_idea(
 ) -> MvpIdeaSuggestion:
     combined = candidate_refs
     if combined is None:
-        external = await _discover_refs(db, query, message_id=message_id)
+        external, _ = await _discover_refs(db, query, message_id=message_id)
         github_refs = await _github_refs(db, message_id=message_id)
         combined = sorted(
             external + github_refs,
@@ -940,14 +941,28 @@ async def build_mvp_idea(
     )
 
 
+def _query_heading(label: str, raw_query: str, normalized_query: str) -> str:
+    """Build a heading that shows the translated query when it differs."""
+    nq = normalized_query.strip()
+    rq = raw_query.strip()
+    if nq and nq.lower() != rq.lower():
+        return f"{label} · {nq} [{rq}]"
+    return f"{label} · {rq}"
+
+
 async def _format_query_results(
     db: aiosqlite.Connection,
     *,
     heading: str,
     candidates: list[_CandidateRef],
+    normalized_query: str = "",
 ) -> str:
+    if not candidates:
+        return telegram_formatting.format_no_signals(heading, normalized_query)
     suggestions = await _candidates_to_suggestions(db, candidates)
-    return telegram_formatting.format_signal_suggestions(heading, suggestions)
+    return telegram_formatting.format_signal_suggestions(
+        heading, suggestions, normalized_query=normalized_query
+    )
 
 
 def _format_plan_created(plan: PersistedEditorialPlan) -> str:
@@ -1107,51 +1122,60 @@ async def handle_command(
             return _format_mvp_handoff(pack)
 
     if command.name == CommandName.PAPERS:
-        candidates = await _discover_refs(
+        raw_query = command.query or ""
+        candidates, normalized_query = await _discover_refs(
             db,
-            command.query or "",
+            raw_query,
             source_names=("arxiv",),
             message_id=message_id,
         )
-        suggestions = await _candidates_to_suggestions(db, candidates)
-        result = await _format_query_results(
+        heading = _query_heading("Papers", raw_query, normalized_query)
+        formatted = await _format_query_results(
             db,
-            heading=f"Papers: {command.query}",
+            heading=heading,
             candidates=candidates,
+            normalized_query=normalized_query,
         )
+        suggestions = await _candidates_to_suggestions(db, candidates)
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
-        return result
+        return formatted
 
     if command.name == CommandName.NEWS:
-        candidates = await _discover_refs(
+        raw_query = command.query or ""
+        candidates, normalized_query = await _discover_refs(
             db,
-            command.query or "",
+            raw_query,
             source_names=("hackernews",),
             message_id=message_id,
         )
-        suggestions = await _candidates_to_suggestions(db, candidates)
-        result = await _format_query_results(
+        heading = _query_heading("Noticias", raw_query, normalized_query)
+        formatted = await _format_query_results(
             db,
-            heading=f"News: {command.query}",
+            heading=heading,
             candidates=candidates,
+            normalized_query=normalized_query,
         )
+        suggestions = await _candidates_to_suggestions(db, candidates)
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
-        return result
+        return formatted
 
     if command.name == CommandName.SIGNALS:
-        candidates = await _discover_refs(
+        raw_query = command.query or ""
+        candidates, normalized_query = await _discover_refs(
             db,
-            command.query or "",
+            raw_query,
             message_id=message_id,
         )
-        suggestions = await _candidates_to_suggestions(db, candidates)
-        result = await _format_query_results(
+        heading = _query_heading("Señales", raw_query, normalized_query)
+        formatted = await _format_query_results(
             db,
-            heading=f"Signals: {command.query}",
+            heading=heading,
             candidates=candidates,
+            normalized_query=normalized_query,
         )
+        suggestions = await _candidates_to_suggestions(db, candidates)
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
-        return result
+        return formatted
 
     if command.name == CommandName.GITHUB_INSIGHTS:
         if not settings.priority_github_repo_list:

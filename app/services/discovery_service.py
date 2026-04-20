@@ -36,8 +36,17 @@ from app.db.queries import insert_signal
 from app.integrations import arxiv_client, hn_client
 from app.schemas.discovery import SignalCandidate, SourceType
 from app.services import relevance_ranker
+from app.services.query_normalizer import normalize as normalize_query
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DiscoveryResult:
+    """Return type of discover(). Carries ranked signals + the query sent to APIs."""
+
+    signals: list[SignalCandidate]
+    normalized_query: str  # may differ from the caller's original query
 
 
 class DiscoveryFetcher(Protocol):
@@ -139,33 +148,41 @@ async def discover(
     limit: int | None = None,
     message_id: int | None = None,
     sources: Sequence[DiscoverySource] | None = None,
-) -> list[SignalCandidate]:
+) -> DiscoveryResult:
     """
-    Run discovery for `query`, persist results, and return ranked candidates.
+    Run discovery for `query`, persist results, and return a DiscoveryResult.
 
-    `message_id` optionally links the discovered signal back to a triggering
-    Telegram message row. This keeps Discovery usable both interactively and
-    from future scheduled workflows.
+    The query is normalized to English before being sent to external APIs.
+    Scoring uses the normalized query so that query-relevance gates work
+    correctly regardless of the input language.
+
+    `message_id` optionally links discovered signals back to a triggering
+    Telegram message row.
     """
     resolved_limit = limit or settings.discovery_default_limit
     resolved_sources = tuple(sources) if sources is not None else get_enabled_sources()
     if not resolved_sources:
         logger.warning("Discovery skipped: no enabled sources.")
-        return []
+        return DiscoveryResult(signals=[], normalized_query=query)
+
+    # Normalize query to English before hitting English-first APIs.
+    normalized = await normalize_query(query)
 
     per_source = max(resolved_limit * settings.discovery_fetch_multiplier, 10)
     source_results = await asyncio.gather(
         *[
             _safe_fetch(
                 source.name,
-                source.fetch(query, max_results=per_source),
+                source.fetch(normalized, max_results=per_source),
             )
             for source in resolved_sources
         ]
     )
 
     merged = _dedup([candidate for results in source_results for candidate in results])
-    ranked = _score(merged, query=query)
+    # Score against the normalized query so that gate logic has English tokens
+    # to match against English paper titles and summaries.
+    ranked = _score(merged, query=normalized)
     top = ranked[:resolved_limit]
 
     for candidate in top:
@@ -186,10 +203,12 @@ async def discover(
             )
 
     logger.info(
-        "Discovery complete: query=%r, sources=%d, candidates=%d, returned=%d.",
+        "Discovery complete: query=%r normalized=%r, sources=%d, "
+        "candidates=%d, returned=%d.",
         query,
+        normalized,
         len(resolved_sources),
         len(merged),
         len(top),
     )
-    return top
+    return DiscoveryResult(signals=top, normalized_query=normalized)

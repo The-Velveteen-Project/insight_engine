@@ -337,83 +337,83 @@ def _fallback_narrative(
     action: RecommendedAction,
 ) -> GeneratedEditorialDraft:
     primary = signals[0]
-    secondary_clause = ""
-    if len(signals) > 1:
-        secondary_clause = " The related signals reinforce the same theme."
+    # Use the actual signal summary as the "why" when archiving — more useful
+    # than a generic sentence. Falls back to a short default if summary is empty.
+    summary_excerpt = (primary.summary or "").strip()
+    if len(summary_excerpt) > 100:
+        summary_excerpt = summary_excerpt[:97] + "…"
 
     if action == RecommendedAction.MVP:
         why = (
-            f"The primary signal '{primary.title}' looks actionable enough to test "
-            "as a small applied build rather than leaving it as commentary."
-            f"{secondary_clause}"
+            "Las señales convergen en algo construible. "
+            "Vale la pena probar un build pequeño y bien acotado."
         )
-        angle = f"Small applied build around {primary.title.lower()}"
+        angle = f"Build mínimo a partir de: {primary.title[:60]}"
         outline = DraftOutline(
-            hook=f"Start from the concrete problem implied by '{primary.title}'.",
+            hook="Comenzar desde el problema concreto que implica la señal.",
             points=[
-                "Define the smallest buildable scope and technical constraints.",
-                "Describe what success would look like and what to measure first.",
+                "Definir el scope más pequeño posible y sus restricciones técnicas.",
+                "Describir qué significa éxito y qué medir primero.",
             ],
-            closing="End with the smallest next experiment worth running.",
+            closing="Cerrar con el experimento más pequeño que vale correr.",
         )
         value = (
-            "This can become a portfolio artifact that shows problem framing, "
-            "technical scope control, and applied execution."
+            "Puede convertirse en un artefacto de portfolio que muestre "
+            "criterio técnico y ejecución aplicada."
         )
     elif action == RecommendedAction.NOTE:
         why = (
-            f"The signal '{primary.title}' is better suited to a technical note "
-            "than to a fast public take."
-            f"{secondary_clause}"
+            summary_excerpt
+            or "Da para una nota técnica bien acotada sobre método o implicación."
         )
-        angle = f"Technical lesson from {primary.title.lower()}"
+        angle = f"Nota técnica: {primary.title[:60]}"
         outline = DraftOutline(
-            hook="Open with the signal and the concrete problem it points to.",
+            hook="Abrir con la señal y el problema concreto al que apunta.",
             points=[
-                "Extract the technical lesson, method, or system implication.",
-                "Clarify one implementation constraint or tradeoff.",
+                "Extraer la lección técnica, método o implicación de sistema.",
+                "Aclarar una restricción o tradeoff de implementación.",
             ],
-            closing="Close with one implication for future builds or research.",
+            closing="Cerrar con una implicación para builds o investigación futura.",
         )
         value = (
-            "This adds evidence of technical judgment and helps turn scattered "
-            "signals into coherent written work."
+            "Agrega evidencia de criterio técnico y ayuda a convertir "
+            "señales dispersas en trabajo escrito coherente."
         )
     elif action == RecommendedAction.POST:
         why = (
-            f"The signal '{primary.title}' is strong enough for a concise public "
-            "insight, but not yet for a larger artifact."
+            summary_excerpt
+            or "Hay ángulo claro para un post conciso sin necesidad de un build."
         )
-        angle = f"One clear public insight from {primary.title.lower()}"
+        angle = f"Un insight público de: {primary.title[:60]}"
         outline = DraftOutline(
-            hook="Open with the concrete signal worth paying attention to.",
+            hook="Abrir con la señal concreta que vale la pena notar.",
             points=[
-                "Add one technical interpretation grounded in the evidence.",
-                "Add one narrow implication rather than a broad claim.",
+                "Agregar una interpretación técnica basada en evidencia.",
+                "Una implicación concreta, no una afirmación amplia.",
             ],
-            closing="Close with one next question worth tracking.",
+            closing="Cerrar con una pregunta abierta que vale seguir.",
         )
         value = (
-            "This keeps the public narrative active without overcommitting to a "
-            "larger build or note."
+            "Mantiene la narrativa pública activa sin sobrecomprometer "
+            "en un build o nota más grande."
         )
-    else:
+    else:  # ARCHIVE
         why = (
-            f"The signal '{primary.title}' should be archived for now because the "
-            "evidence is weak, early, or not sufficiently differentiated."
+            summary_excerpt
+            or "Sin base suficiente para desarrollar esto ahora."
         )
-        angle = f"Archive rationale for {primary.title.lower()}"
+        angle = f"Archivar: {primary.title[:60]}"
         outline = DraftOutline(
-            hook="State clearly what the signal was.",
+            hook="Nombrar claramente cuál fue la señal.",
             points=[
-                "Explain why it is not strong enough to pursue now.",
-                "Note what kind of future evidence would justify revisiting it.",
+                "Explicar por qué no es suficientemente fuerte para desarrollar ahora.",
+                "Anotar qué tipo de evidencia futura justificaría revisitarla.",
             ],
-            closing="End with a narrow condition for reconsideration.",
+            closing="Cerrar con la condición mínima para reconsiderar.",
         )
         value = (
-            "A clear archive decision protects focus and prevents weak signals from "
-            "turning into noisy output."
+            "Una decisión de archivo clara protege el foco y evita que señales "
+            "débiles generen output ruidoso."
         )
 
     return GeneratedEditorialDraft(

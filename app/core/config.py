@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     whisper_model: str = "whisper-1"
     editorial_model: str = "gpt-4.1-mini"
 
+    # Query normalization via Claude Haiku (optional — falls back to raw query)
+    anthropic_api_key: str = ""
+    normalizer_model: str = "claude-haiku-4-5"
+
     discovery_default_limit: int = 3
     discovery_fetch_multiplier: int = 4
     discovery_enabled_sources: str = "arxiv,hackernews"

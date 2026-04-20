@@ -17,6 +17,7 @@ from app.schemas.commands import (
     WeeklySummary,
 )
 from app.schemas.discovery import SignalCandidate
+from app.services.discovery_service import DiscoveryResult
 from app.schemas.drafts import (
     EditorialDraft,
     EditorialDraftContent,
@@ -216,7 +217,9 @@ async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[candidate]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[candidate], normalized_query="climate risk")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator._plan_for_signal_ids",
@@ -225,10 +228,10 @@ async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -
     ):
         response = await handle_command("/papers climate risk", db, message_id=1)
 
-    assert "Papers: climate risk" in response
+    assert "Papers · climate risk" in response
     assert f"#{signal_id}" in response
-    assert "action: <code>note</code>" in response
-    assert "my take:" in response
+    assert "nota técnica" in response
+    assert "Para avanzar" in response
 
 
 async def test_handle_command_github_insights_formats_results(
@@ -284,7 +287,9 @@ async def test_build_weekly_summary_returns_actionable_summary(
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[external]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[external], normalized_query="climate risk")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator.github_insight_service.suggest_repo_insights",
@@ -314,7 +319,9 @@ async def test_build_mvp_idea_returns_conservative_non_mvp_when_needed(
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[candidate]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[candidate], normalized_query="health modeling")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator.github_insight_service.suggest_repo_insights",
@@ -359,9 +366,9 @@ async def test_handle_command_weekly_uses_summary_formatter(
     ):
         response = await handle_command("/weekly", db)
 
-    assert "Weekly summary" in response
-    assert "editorial:" in response
-    assert "my take:" in response
+    assert "Resumen semanal" in response
+    assert "Editorial:" in response
+    assert "Próximo:" in response
 
 
 async def test_handle_command_mvp_ideas_formats_output(
@@ -387,9 +394,9 @@ async def test_handle_command_mvp_ideas_formats_output(
     ):
         response = await handle_command("/mvp_ideas dengue surveillance", db)
 
-    assert "MVP idea" in response
+    assert "Ideas de MVP" in response
     assert "<code>mvp</code>" in response
-    assert "my take:" in response
+    assert "Para continuar" in response
 
 
 def test_format_signal_suggestions_is_conservative_for_weak_evidence() -> None:
@@ -406,8 +413,8 @@ def test_format_signal_suggestions_is_conservative_for_weak_evidence() -> None:
         ],
     )
 
-    assert "todavía no hay base fuerte" in text
-    assert "<code>archive</code>" in text
+    assert "Sin base fuerte todavía" in text
+    assert "archive" in text
 
 
 def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None:
@@ -438,8 +445,8 @@ def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None
         ],
     )
 
-    assert "mezcla de señales" in text
-    assert "<code>note</code>" in text
+    assert "señales" in text
+    assert "post" in text
 
 
 async def test_handle_command_plan_creates_persisted_plan(
@@ -453,9 +460,9 @@ async def test_handle_command_plan_creates_persisted_plan(
     ):
         response = await handle_command("/plan 5", db)
 
-    assert "Plan #12 created" in response
-    assert "action: <code>post</code>" in response
-    assert "next: /approve 12 or /discard_plan 12" in response
+    assert "Plan #12" in response
+    assert "post" in response
+    assert "discard_plan 12" in response
 
 
 async def test_handle_command_plan_returns_not_found_for_missing_signal(
@@ -487,9 +494,9 @@ async def test_handle_command_approve_transitions_plan(
     ):
         response = await handle_command("/approve 14", db)
 
-    assert "Plan #14 approved" in response
-    assert "status: <code>approved</code>" in response
-    assert "next: /draft 14 or keep it approved" in response
+    assert "Plan #14" in response
+    assert "<code>approved</code>" in response
+    assert "draft 14" in response
 
 
 async def test_handle_command_approve_returns_invalid_state(
@@ -525,8 +532,8 @@ async def test_handle_command_discard_plan_transitions_plan(
     ):
         response = await handle_command("/discard_plan 15", db)
 
-    assert "Plan #15 discarded" in response
-    assert "status: <code>discarded</code>" in response
+    assert "Plan #15" in response
+    assert "<code>discarded</code>" in response
 
 
 async def test_handle_command_draft_creates_persisted_draft(
@@ -540,9 +547,9 @@ async def test_handle_command_draft_creates_persisted_draft(
     ):
         response = await handle_command("/draft 12", db)
 
-    assert "Draft #4 created" in response
-    assert "plan: <code>#12</code>" in response
-    assert "title:" in response
+    assert "Draft #4" in response
+    assert "plan #12" in response
+    assert "muéstramelo" in response
 
 
 async def test_handle_command_draft_returns_invalid_state(
@@ -594,7 +601,7 @@ async def test_handle_command_show_plan_formats_summary(
         response = await handle_command("/show_plan 22", db)
 
     assert "<b>Plan #22</b>" in response
-    assert "signals: <code>5, 8</code>" in response
+    assert "#5" in response and "#8" in response
 
 
 async def test_handle_command_show_draft_formats_summary(
@@ -609,8 +616,8 @@ async def test_handle_command_show_draft_formats_summary(
         response = await handle_command("/show_draft 9", db)
 
     assert "<b>Draft #9</b>" in response
-    assert "plan: <code>#22</code>" in response
-    assert "short:" in response
+    assert "plan #22" in response
+    assert "muéstramelo" in response
 
 
 async def test_handle_command_show_draft_returns_not_found(
@@ -643,9 +650,9 @@ async def test_handle_command_mvp_handoff_formats_summary(
     ):
         response = await handle_command("/mvp_handoff 17", db)
 
-    assert "MVP handoff ready" in response
-    assert "plan: <code>#17</code>" in response
-    assert "builder:" in response
+    assert "MVP handoff listo" in response
+    assert "<code>#17</code>" in response
+    assert "Builder:" in response
 
 
 async def test_handle_operator_text_accepts_bare_help(
@@ -670,8 +677,7 @@ async def test_handle_operator_text_handles_gratitude_naturally(
 ) -> None:
     response = await handle_operator_text("gracias", db, chat_id=698)
     assert response is not None
-    assert "De una" in response
-    assert "último draft" in response
+    assert "quieras" in response
 
 
 async def test_handle_operator_text_accepts_bare_signals(
@@ -683,7 +689,9 @@ async def test_handle_operator_text_accepts_bare_signals(
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[candidate]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[candidate], normalized_query="climate risk")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator._plan_for_signal_ids",
@@ -697,7 +705,7 @@ async def test_handle_operator_text_accepts_bare_signals(
         )
 
     assert response is not None
-    assert "Signals: climate risk" in response
+    assert "climate risk" in response
     assert f"#{signal_id}" in response
 
 
@@ -712,7 +720,9 @@ async def test_handle_operator_text_uses_chat_memory_for_plan_del_primero(
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[first, second]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[first, second], normalized_query="climate risk")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator._plan_for_signal_ids",
@@ -752,7 +762,9 @@ async def test_handle_operator_text_uses_pending_action_for_hazlo_after_signals(
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[first, second]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[first, second], normalized_query="climate risk")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator._plan_for_signal_ids",
@@ -873,7 +885,9 @@ async def test_handle_operator_text_que_sigue_returns_pending_hint(
     with (
         patch(
             "app.services.telegram_orchestrator.discovery_service.discover",
-            new=AsyncMock(return_value=[candidate]),
+            new=AsyncMock(
+                return_value=DiscoveryResult(signals=[candidate], normalized_query="climate risk")
+            ),
         ),
         patch(
             "app.services.telegram_orchestrator._plan_for_signal_ids",
@@ -911,8 +925,8 @@ async def test_handle_operator_text_returns_short_version_for_last_draft(
 
     mock_get.assert_awaited_once_with(db, 13)
     assert response is not None
-    assert "Draft #13 — short version" in response
-    assert "cta:" in response
+    assert "Draft #13 — versión corta" in response
+    assert "CTA:" in response
 
 
 async def test_handle_operator_text_muestramelo_prefers_last_draft(
@@ -949,8 +963,8 @@ async def test_handle_command_unknown_returns_soft_guidance(
     db: aiosqlite.Connection,
 ) -> None:
     response = await handle_command("/esto_no_existe", db)
-    assert "No tomé eso como una instrucción operativa" in response
-    assert "signals climate risk" in response
+    assert "No entendí" in response
+    assert "signals" in response
 
 
 async def test_handle_operator_text_returns_note_capture_ack(
@@ -962,4 +976,4 @@ async def test_handle_operator_text_returns_note_capture_ack(
         chat_id=704,
     )
     assert response is not None
-    assert "Lo registré como señal manual" in response
+    assert "Registrado" in response

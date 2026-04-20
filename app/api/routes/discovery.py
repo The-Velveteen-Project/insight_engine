@@ -56,14 +56,14 @@ async def suggest(
     are written to `signals` before the response is sent back to the client.
     It is not a read-only preview endpoint.
     """
-    candidates = await discovery_service.discover(
+    result = await discovery_service.discover(
         q,
         db,
         limit=limit,
         message_id=message_id,
     )
     return SuggestResponse(
-        query=q,
-        total_candidates=len(candidates),
-        signals=[SignalResponse.from_candidate(c) for c in candidates],
+        query=result.normalized_query,
+        total_candidates=len(result.signals),
+        signals=[SignalResponse.from_candidate(c) for c in result.signals],
     )

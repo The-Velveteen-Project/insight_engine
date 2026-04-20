@@ -199,15 +199,22 @@ def rank(
 
     recency_bonus = 0.0
     if candidate.published_at is not None:
-        # Normalise to UTC for comparison
         pub = candidate.published_at
         if pub.tzinfo is None:
             pub = pub.replace(tzinfo=UTC)
         if datetime.now(UTC) - pub <= _RECENCY_WINDOW:
             recency_bonus = _RECENCY_BONUS
 
+    # Query gate — query relevance is the primary criterion.
+    # When a query is provided but nothing matched, penalise heavily so that
+    # off-topic profile hits don't outrank genuinely relevant results.
+    #   query is None  →  no gate (pure profile scoring, used for scheduled jobs)
+    #   query_score > 0 →  matched: gate = 1.0 (score normally)
+    #   query_score == 0 →  no match: gate = 0.3 (caps profile score at ~0.18)
+    query_gate = 1.0 if (query is None or query_score > 0.0) else 0.3
+
     raw = primary_score + secondary_score + tertiary_score + query_score + recency_bonus
-    score = round(min(raw, _MAX_SCORE), 4)
+    score = round(min(raw * query_gate, _MAX_SCORE), 4)
 
     # Build a terse, readable note
     parts: list[str] = []
@@ -221,6 +228,8 @@ def rank(
         parts.append(f"query={query_hits[:2]}")
     if recency_bonus:
         parts.append("recent")
+    if query is not None and query_score == 0.0 and _query_terms(query):
+        parts.append("sin match temático")
     note = "; ".join(parts) if parts else "no keyword matches"
 
     return score, note
