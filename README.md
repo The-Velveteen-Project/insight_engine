@@ -76,6 +76,7 @@ Responsibilities:
 
 - interpret Telegram text or slash commands
 - keep short-lived chat context
+- persist short operator state by `chat_id` so follow-ups survive deploys and restarts
 - route to the right internal service
 - suggest the next reasonable step
 - keep responses clear, sober, and genuinely useful
@@ -92,7 +93,7 @@ Responsibilities:
 - rank and persist useful signals
 - gate relevance scoring by query match first, profile fit second
 
-The query normalizer is a narrow utility, not a planner. If it fails, discovery falls back to the raw user query.
+The query normalizer is a narrow utility, not a planner. It now uses a small in-process cache and a bounded timeout. If it fails or times out, discovery falls back to the raw user query.
 
 ### 3. Editorial Strategist
 
@@ -202,7 +203,7 @@ flowchart TB
     end
 
     subgraph SHELL["Visible Agent Shell"]
-        OP["Velveteen Operator\nTelegram orchestration + short chat state"]
+        OP["Velveteen Operator\nTelegram orchestration + persisted short chat state"]
     end
 
     subgraph CORE["Internal Services"]
@@ -218,6 +219,7 @@ flowchart TB
     subgraph UTIL["Narrow Utilities"]
         NORM["Query Normalizer\nnon-fatal EN normalization"]
         INT["Internal cron routes\nPOST /api/v1/internal/..."]
+        TDEL["Telegram Delivery\nchunking + retry"]
     end
 
     subgraph AUTO["Automation"]
@@ -230,6 +232,7 @@ flowchart TB
         SIG[("signals")]
         EPL[("editorial_plans")]
         EDR[("editorial_drafts")]
+        SES[("telegram_sessions")]
     end
 
     subgraph EXT["External APIs"]
@@ -252,6 +255,7 @@ flowchart TB
     OP --> PLAN
     OP --> DRAFT
     OP --> HAND
+    OP --> TDEL
 
     API --> DISC
     API --> PLAN
@@ -266,6 +270,7 @@ flowchart TB
 
     DISC --> NORM
     NORM --> ANT
+    TDEL --> TG
     DISC --> ARX
     DISC --> HN
     DISC --> GIT
@@ -275,6 +280,7 @@ flowchart TB
     DISC --> SIG
     PLAN --> EPL
     DRAFT --> EDR
+    OP --> SES
 
     CTX --> SIG
     CTX --> EPL
@@ -293,6 +299,7 @@ The goal is not to compress everything into tiny bot messages. The goal is:
 - visible links when they matter
 - honest handling of weak evidence
 - and next steps that help Carlos think, not just click commands
+- delivery that remains reliable even when a response is longer or Telegram is temporarily noisy
 
 It supports both:
 
@@ -323,6 +330,7 @@ In practice, that means:
 - strong results should feel readable, not cryptic
 - weak results should be labeled as exploratory instead of overstated
 - and long titles, links, or summaries should only be shortened when they truly hurt comprehension
+- follow-ups like `hazlo`, `apruébalo`, `qué sigue`, and `muéstramelo` should survive ordinary restarts because the operator session now persists in SQLite
 
 ## Main Working Loops
 
@@ -361,6 +369,9 @@ In practice, that means:
   - statuses:
     - `draft`
     - `discarded`
+- `telegram_sessions`
+  - persisted short operator state by `chat_id`
+  - stores the last useful signals, plan, draft, and pending next action
 
 ## Main API Endpoints
 
@@ -449,9 +460,11 @@ Review at least:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_WEBHOOK_SECRET`
 - `OPENAI_API_KEY` if you want real transcription or structured generation
+- `ANTHROPIC_API_KEY` if you want multilingual query normalization
 - `GITHUB_TOKEN` if you want higher GitHub API limits
 - `ENABLE_SCHEDULER`
 - `TELEGRAM_ADMIN_CHAT_ID`
+- `INTERNAL_CRON_SECRET` if you want GitHub Actions-driven weekly jobs
 
 ### 3. Initialize the database
 
@@ -512,6 +525,7 @@ The repository now includes:
 - `ENABLE_SCHEDULER=false`
 - `TELEGRAM_ADMIN_CHAT_ID`
 - `INTERNAL_CRON_SECRET`
+- `DB_PATH=/data/engine.db`
 
 ### SQLite on Railway
 
@@ -542,6 +556,16 @@ That means:
   - `POST /api/v1/internal/run-mvp-scan`
 
 The local in-process scheduler remains useful for development, but it is no longer the production source of truth.
+
+### Operator reliability in production
+
+The current production hardening assumes:
+
+- `telegram_sessions` persists short operator context in SQLite
+- Telegram delivery uses chunking plus small retries for transient failures and `429` responses
+- query normalization is bounded by timeout and can fall back to the raw query without breaking discovery
+
+This keeps the operator usable even when Railway restarts the app or an external model/API is briefly slow.
 
 ### Telegram after deploy
 
@@ -589,12 +613,14 @@ Today it already behaves like:
 - a persisted editorial workflow
 - a conservative discovery engine
 - a multilingual discovery layer with non-fatal query normalization
+- a Telegram-facing operator with persisted short session state
+- a Telegram delivery layer hardened for longer readability-first messages
 - a human-in-the-loop planning system
 - a draft generator that does not bypass approval
 
 The immediate next product step is:
 
-- keep tightening Telegram continuity so the operator feels even less like a command bot
+- keep tightening Telegram continuity and judgment so the operator feels even less like a command bot
 - then move persistence from local-first SQLite toward Supabase-backed production state
 
 Still intentionally out of scope:
