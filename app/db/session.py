@@ -105,6 +105,19 @@ CREATE TABLE IF NOT EXISTS editorial_drafts (
 )
 """
 
+_CREATE_TELEGRAM_SESSIONS = """
+CREATE TABLE IF NOT EXISTS telegram_sessions (
+    chat_id            INTEGER   PRIMARY KEY,
+    last_signal_ids    TEXT      NOT NULL DEFAULT '[]',
+    last_plan_id       INTEGER,
+    last_draft_id      INTEGER,
+    pending_command    TEXT,
+    pending_target_id  INTEGER,
+    created_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at         TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 # Idempotent migrations — ALTER TABLE ADD COLUMN is a no-op if the column
 # already exists (OperationalError is caught and silenced in _migrate).
 _MIGRATIONS: list[str] = [
@@ -126,12 +139,13 @@ _CREATE_INDEXES = [
     " ON signals(source_type, source_id)",
     "CREATE INDEX IF NOT EXISTS idx_signals_decision ON signals(decision)",
     "CREATE INDEX IF NOT EXISTS idx_signals_message_id ON signals(message_id)",
-    "CREATE INDEX IF NOT EXISTS idx_editorial_plans_status"
-    " ON editorial_plans(status)",
+    "CREATE INDEX IF NOT EXISTS idx_editorial_plans_status ON editorial_plans(status)",
     "CREATE INDEX IF NOT EXISTS idx_editorial_plans_created_at"
     " ON editorial_plans(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_editorial_drafts_status"
     " ON editorial_drafts(status)",
+    "CREATE INDEX IF NOT EXISTS idx_telegram_sessions_updated_at"
+    " ON telegram_sessions(updated_at)",
 ]
 
 
@@ -155,6 +169,7 @@ async def init_db() -> None:
         await db.execute(_CREATE_SIGNALS)
         await db.execute(_CREATE_EDITORIAL_PLANS)
         await db.execute(_CREATE_EDITORIAL_DRAFTS)
+        await db.execute(_CREATE_TELEGRAM_SESSIONS)
         for stmt in _CREATE_INDEXES:
             await db.execute(stmt)
         await _migrate(db)

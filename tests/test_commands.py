@@ -33,6 +33,7 @@ from app.schemas.editorial import (
 )
 from app.schemas.github import GitHubInsightCandidate
 from app.schemas.mvp_handoff import MvpHandoffPack, MvpPromptBundle
+from app.services import telegram_orchestrator as orchestrator_module
 from app.services.discovery_service import DiscoveryResult
 from app.services.draft_generator import (
     DraftGenerationStateError,
@@ -950,6 +951,37 @@ async def test_handle_operator_text_que_sigue_returns_pending_hint(
         await handle_operator_text("signals climate risk", db, chat_id=707)
 
     response = await handle_operator_text("qué sigue", db, chat_id=707)
+    assert response is not None
+    assert "Siguiente paso" in response
+    assert f"<code>#{signal_id}</code>" in response
+
+
+async def test_handle_operator_text_recovers_pending_state_from_db(
+    db: aiosqlite.Connection,
+) -> None:
+    candidate = _signal_candidate("2401.60011", "Signal for db-backed memory")
+    signal_id = await _persist_signal(db, candidate)
+
+    with (
+        patch(
+            "app.services.telegram_orchestrator.discovery_service.discover",
+            new=AsyncMock(
+                return_value=DiscoveryResult(
+                    signals=[candidate], normalized_query="climate risk"
+                )
+            ),
+        ),
+        patch(
+            "app.services.telegram_orchestrator._plan_for_signal_ids",
+            new=AsyncMock(return_value=_plan([signal_id], RecommendedAction.NOTE)),
+        ),
+    ):
+        await handle_operator_text("signals climate risk", db, chat_id=807)
+
+    orchestrator_module._CHAT_STATE.clear()
+
+    response = await handle_operator_text("qué sigue", db, chat_id=807)
+
     assert response is not None
     assert "Siguiente paso" in response
     assert f"<code>#{signal_id}</code>" in response

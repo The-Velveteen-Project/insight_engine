@@ -13,12 +13,15 @@ Design constraints:
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import OrderedDict
 from typing import Any
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
+_CACHE: OrderedDict[str, str] = OrderedDict()
 
 _SYSTEM_PROMPT = (
     "You are a search query normalizer for academic and tech APIs "
@@ -47,6 +50,21 @@ def _extract_text(response: Any) -> str:
     return ""
 
 
+def _get_cached(query: str) -> str | None:
+    cached = _CACHE.get(query)
+    if cached is None:
+        return None
+    _CACHE.move_to_end(query)
+    return cached
+
+
+def _store_cached(query: str, normalized: str) -> None:
+    _CACHE[query] = normalized
+    _CACHE.move_to_end(query)
+    while len(_CACHE) > settings.normalizer_cache_size:
+        _CACHE.popitem(last=False)
+
+
 async def normalize(query: str) -> str:
     """
     Return an English-normalized version of `query`.
@@ -54,23 +72,32 @@ async def normalize(query: str) -> str:
     Uses Claude Haiku when configured.
     Falls back to the original query on any error or if key not set.
     """
-    if not settings.anthropic_api_key or not query.strip():
+    stripped = query.strip()
+    if not settings.anthropic_api_key or not stripped:
         return query
+    cached = _get_cached(stripped)
+    if cached is not None:
+        return cached
 
     try:
         from anthropic import AsyncAnthropic  # deferred import
 
         client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-        message = await client.messages.create(
-            model=settings.normalizer_model,
-            max_tokens=32,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": query.strip()}],
+        message = await asyncio.wait_for(
+            client.messages.create(
+                model=settings.normalizer_model,
+                max_tokens=32,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": stripped}],
+            ),
+            timeout=settings.normalizer_timeout_seconds,
         )
         normalized = _extract_text(message).strip('"').strip("'")
-        if normalized and normalized.lower() != query.strip().lower():
+        final = normalized or query
+        _store_cached(stripped, final)
+        if normalized and normalized.lower() != stripped.lower():
             logger.info("Query normalized: %r → %r", query, normalized)
-        return normalized or query
+        return final
     except Exception as exc:
         logger.warning("Query normalization failed for %r: %s", query, exc)
         return query

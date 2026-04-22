@@ -13,6 +13,8 @@ class Settings(BaseSettings):
     telegram_webhook_secret: str = ""
     telegram_admin_chat_id: int = 0
     telegram_command_limit: int = 3
+    telegram_max_message_chars: int = 4096
+    telegram_send_retries: int = 2
     internal_cron_secret: str = ""
 
     # Phase 3: voice transcription via OpenAI Whisper
@@ -24,6 +26,8 @@ class Settings(BaseSettings):
     # Query normalization via Claude Haiku (optional — falls back to raw query)
     anthropic_api_key: str = ""
     normalizer_model: str = "claude-haiku-4-5"
+    normalizer_timeout_seconds: float = 3.0
+    normalizer_cache_size: int = 128
 
     discovery_default_limit: int = 3
     discovery_fetch_multiplier: int = 4
@@ -32,8 +36,7 @@ class Settings(BaseSettings):
     github_insights_default_limit: int = 5
     github_commits_limit: int = 8
     priority_github_repos: str = (
-        "The-Velveteen-Project/StochastoGreen,"
-        "The-Velveteen-Project/EcoAgent"
+        "The-Velveteen-Project/StochastoGreen,The-Velveteen-Project/EcoAgent"
     )
     # PLANNED: Phase 11 - Supabase migration.
     # Declared here so deployment configuration can be prepared early,

@@ -403,3 +403,64 @@ async def update_editorial_draft_status(
         (status.value, draft_id),
     )
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# Telegram sessions
+# ---------------------------------------------------------------------------
+
+
+async def get_telegram_session(
+    db: aiosqlite.Connection,
+    chat_id: int,
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        """
+        SELECT *
+        FROM telegram_sessions
+        WHERE chat_id = ?
+        """,
+        (chat_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def upsert_telegram_session(
+    db: aiosqlite.Connection,
+    *,
+    chat_id: int,
+    last_signal_ids: list[int],
+    last_plan_id: int | None,
+    last_draft_id: int | None,
+    pending_command: str | None,
+    pending_target_id: int | None,
+) -> None:
+    await db.execute(
+        """
+        INSERT INTO telegram_sessions (
+            chat_id,
+            last_signal_ids,
+            last_plan_id,
+            last_draft_id,
+            pending_command,
+            pending_target_id,
+            updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(chat_id) DO UPDATE SET
+            last_signal_ids = excluded.last_signal_ids,
+            last_plan_id = excluded.last_plan_id,
+            last_draft_id = excluded.last_draft_id,
+            pending_command = excluded.pending_command,
+            pending_target_id = excluded.pending_target_id,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (
+            chat_id,
+            json.dumps(last_signal_ids),
+            last_plan_id,
+            last_draft_id,
+            pending_command,
+            pending_target_id,
+        ),
+    )
+    await db.commit()

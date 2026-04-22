@@ -1,3 +1,4 @@
+import asyncio
 import contextlib
 import os
 import tempfile
@@ -14,18 +15,95 @@ def _base() -> str:
     return f"https://api.telegram.org/bot{settings.telegram_bot_token}"
 
 
+def _message_chunks(text: str, *, limit: int) -> list[str]:
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    current = ""
+    blocks = text.split("\n\n")
+
+    for block in blocks:
+        candidate = block if not current else f"{current}\n\n{block}"
+        if len(candidate) <= limit:
+            current = candidate
+            continue
+
+        if current:
+            chunks.append(current)
+            current = ""
+
+        if len(block) <= limit:
+            current = block
+            continue
+
+        lines = block.splitlines()
+        line_buffer = ""
+        for line in lines:
+            line_candidate = line if not line_buffer else f"{line_buffer}\n{line}"
+            if len(line_candidate) <= limit:
+                line_buffer = line_candidate
+                continue
+            if line_buffer:
+                chunks.append(line_buffer)
+            line_buffer = line
+            while len(line_buffer) > limit:
+                chunks.append(line_buffer[:limit])
+                line_buffer = line_buffer[limit:]
+        if line_buffer:
+            current = line_buffer
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+async def _post_message(
+    client: httpx.AsyncClient,
+    *,
+    chat_id: int,
+    text: str,
+    parse_mode: str,
+) -> None:
+    attempts = settings.telegram_send_retries + 1
+    for attempt in range(attempts):
+        try:
+            response = await client.post(
+                f"{_base()}/sendMessage",
+                json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            return
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 429 or attempt >= attempts - 1:
+                raise
+            retry_after = 1.0
+            with contextlib.suppress(Exception):
+                payload = exc.response.json()
+                params = payload.get("parameters", {})
+                retry_after = float(params.get("retry_after", 1))
+            await asyncio.sleep(retry_after)
+        except httpx.RequestError:
+            if attempt >= attempts - 1:
+                raise
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+
 async def send_message(
     chat_id: int,
     text: str,
     parse_mode: str = "HTML",
 ) -> None:
-    async with httpx.AsyncClient() as client:
-        response = await client.post(
-            f"{_base()}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": parse_mode},
-            timeout=10.0,
-        )
-        response.raise_for_status()
+    transport = httpx.AsyncHTTPTransport(retries=1)
+    async with httpx.AsyncClient(transport=transport) as client:
+        for chunk in _message_chunks(text, limit=settings.telegram_max_message_chars):
+            await _post_message(
+                client,
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode=parse_mode,
+            )
 
 
 async def get_file(file_id: str) -> dict[str, Any]:

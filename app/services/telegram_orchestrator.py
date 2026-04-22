@@ -14,12 +14,17 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from json import JSONDecodeError, loads
 from typing import Literal
 
 import aiosqlite
 
 from app.core.config import settings
-from app.db.queries import get_signal_by_source_identity
+from app.db.queries import (
+    get_signal_by_source_identity,
+    get_telegram_session,
+    upsert_telegram_session,
+)
 from app.schemas.commands import (
     CommandName,
     MvpIdeaSuggestion,
@@ -266,10 +271,85 @@ def _strip_accents(text: str) -> str:
     return "".join(char for char in normalized if not unicodedata.combining(char))
 
 
+def _default_state() -> _ChatState:
+    return _ChatState(last_signal_ids=[])
+
+
 def _get_state(chat_id: int | None) -> _ChatState | None:
     if chat_id is None:
         return None
-    return _CHAT_STATE.setdefault(chat_id, _ChatState(last_signal_ids=[]))
+    return _CHAT_STATE.setdefault(chat_id, _default_state())
+
+
+def _state_from_row(row: aiosqlite.Row) -> _ChatState:
+    raw_signal_ids = row["last_signal_ids"] or "[]"
+    try:
+        parsed = loads(str(raw_signal_ids))
+    except JSONDecodeError:
+        parsed = []
+    signal_ids = [int(item) for item in parsed if isinstance(item, int)]
+
+    pending_raw = row["pending_command"]
+    pending_command = None
+    if isinstance(pending_raw, str):
+        try:
+            pending_command = CommandName(pending_raw)
+        except ValueError:
+            pending_command = None
+
+    return _ChatState(
+        last_signal_ids=signal_ids,
+        last_plan_id=int(row["last_plan_id"])
+        if row["last_plan_id"] is not None
+        else None,
+        last_draft_id=(
+            int(row["last_draft_id"]) if row["last_draft_id"] is not None else None
+        ),
+        pending_command=pending_command,
+        pending_target_id=(
+            int(row["pending_target_id"])
+            if row["pending_target_id"] is not None
+            else None
+        ),
+    )
+
+
+async def _load_state(
+    db: aiosqlite.Connection,
+    chat_id: int | None,
+) -> _ChatState | None:
+    if chat_id is None:
+        return None
+    cached = _CHAT_STATE.get(chat_id)
+    if cached is not None:
+        return cached
+
+    row = await get_telegram_session(db, chat_id)
+    state = _state_from_row(row) if row is not None else _default_state()
+    _CHAT_STATE[chat_id] = state
+    return state
+
+
+async def _persist_state(
+    db: aiosqlite.Connection,
+    chat_id: int | None,
+) -> None:
+    if chat_id is None:
+        return
+    state = _CHAT_STATE.get(chat_id)
+    if state is None:
+        return
+    await upsert_telegram_session(
+        db,
+        chat_id=chat_id,
+        last_signal_ids=state.last_signal_ids,
+        last_plan_id=state.last_plan_id,
+        last_draft_id=state.last_draft_id,
+        pending_command=(
+            state.pending_command.value if state.pending_command is not None else None
+        ),
+        pending_target_id=state.pending_target_id,
+    )
 
 
 def _set_pending(
@@ -1004,6 +1084,7 @@ async def handle_command(
     message_id: int | None = None,
     chat_id: int | None = None,
 ) -> str:
+    state = await _load_state(db, chat_id)
     command = parse_command(raw_text)
 
     if command.name == CommandName.START:
@@ -1015,7 +1096,6 @@ async def handle_command(
         if command.name == CommandName.HELP and command.query == "__gratitude__":
             return telegram_formatting.format_gratitude()
         if command.name == CommandName.HELP and command.query == "__short_draft__":
-            state = _get_state(chat_id)
             draft_id = state.last_draft_id if state is not None else None
             if draft_id is None:
                 return _pending_help(state)
@@ -1023,7 +1103,7 @@ async def handle_command(
             _remember_draft(chat_id, draft)
             return telegram_formatting.format_draft_short_version(draft)
         if command.name == CommandName.HELP and command.query == "__pending__":
-            return _pending_help(_get_state(chat_id))
+            return _pending_help(state)
         if command.name == CommandName.UNKNOWN:
             return telegram_formatting.format_soft_unknown(command.raw_text)
         return telegram_formatting.format_help()
@@ -1045,6 +1125,7 @@ async def handle_command(
             except LookupError:
                 return _not_found("Signal", entity_id)
             _remember_plan(chat_id, plan)
+            await _persist_state(db, chat_id)
             return _format_plan_created(plan)
 
         if command.name == CommandName.APPROVE:
@@ -1059,6 +1140,7 @@ async def handle_command(
             except editorial_planner.EditorialPlanTransitionError as exc:
                 return _invalid_transition(str(exc))
             _remember_plan(chat_id, plan)
+            await _persist_state(db, chat_id)
             return _format_plan_updated(plan, verb="approved")
 
         if command.name == CommandName.DISCARD_PLAN:
@@ -1073,6 +1155,7 @@ async def handle_command(
             except editorial_planner.EditorialPlanTransitionError as exc:
                 return _invalid_transition(str(exc))
             _remember_plan(chat_id, plan)
+            await _persist_state(db, chat_id)
             return _format_plan_updated(plan, verb="discarded")
 
         if command.name == CommandName.DRAFT:
@@ -1093,6 +1176,7 @@ async def handle_command(
             except draft_generator.DraftGenerationStateError as exc:
                 return _invalid_transition(str(exc))
             _remember_draft(chat_id, draft)
+            await _persist_state(db, chat_id)
             return _format_draft_created(draft)
 
         if command.name == CommandName.SHOW_PLAN:
@@ -1104,6 +1188,7 @@ async def handle_command(
             except LookupError:
                 return _not_found("Plan", entity_id)
             _remember_plan(chat_id, plan)
+            await _persist_state(db, chat_id)
             return telegram_formatting.format_plan_summary(plan)
 
         if command.name == CommandName.SHOW_DRAFT:
@@ -1115,6 +1200,7 @@ async def handle_command(
             except LookupError:
                 return _not_found("Draft", entity_id)
             _remember_draft(chat_id, draft)
+            await _persist_state(db, chat_id)
             return telegram_formatting.format_draft_summary(draft)
 
         if command.name == CommandName.MVP_HANDOFF:
@@ -1125,6 +1211,7 @@ async def handle_command(
             except mvp_handoff.MvpHandoffStateError as exc:
                 return _invalid_transition(str(exc))
             _set_pending(chat_id, command_name=None, target_id=None)
+            await _persist_state(db, chat_id)
             return _format_mvp_handoff(pack)
 
     if command.name == CommandName.PAPERS:
@@ -1144,6 +1231,7 @@ async def handle_command(
         )
         suggestions = await _candidates_to_suggestions(db, candidates)
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
+        await _persist_state(db, chat_id)
         return formatted
 
     if command.name == CommandName.NEWS:
@@ -1163,6 +1251,7 @@ async def handle_command(
         )
         suggestions = await _candidates_to_suggestions(db, candidates)
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
+        await _persist_state(db, chat_id)
         return formatted
 
     if command.name == CommandName.SIGNALS:
@@ -1181,6 +1270,7 @@ async def handle_command(
         )
         suggestions = await _candidates_to_suggestions(db, candidates)
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
+        await _persist_state(db, chat_id)
         return formatted
 
     if command.name == CommandName.GITHUB_INSIGHTS:
@@ -1194,6 +1284,7 @@ async def handle_command(
             candidates=candidates,
         )
         _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
+        await _persist_state(db, chat_id)
         return result
 
     if command.name == CommandName.WEEKLY:
@@ -1212,6 +1303,7 @@ async def handle_command(
                 if signal.signal_id is not None
             ],
         )
+        await _persist_state(db, chat_id)
         return telegram_formatting.format_weekly_summary(summary)
 
     if command.name == CommandName.MVP_IDEAS:
@@ -1221,6 +1313,7 @@ async def handle_command(
             message_id=message_id,
         )
         _remember_signal_ids(chat_id, idea.signal_ids)
+        await _persist_state(db, chat_id)
         return telegram_formatting.format_mvp_idea(idea)
 
     return telegram_formatting.format_help()
@@ -1236,6 +1329,8 @@ async def handle_operator_text(
     stripped = raw_text.strip()
     if not stripped:
         return None
+
+    await _load_state(db, chat_id)
 
     if is_command_text(stripped):
         return await handle_command(
