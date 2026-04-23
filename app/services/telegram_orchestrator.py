@@ -972,6 +972,7 @@ async def build_mvp_idea(
                 "Better to wait for stronger evidence before proposing a build."
             ),
             signal_ids=[],
+            supporting_signals=[],
         )
 
     signal_ids = await _top_signal_ids(db, combined, limit=3)
@@ -991,8 +992,10 @@ async def build_mvp_idea(
             system_type="no build suggested",
             portfolio_fit="Wait for a cleaner set of persisted signals.",
             signal_ids=[],
+            supporting_signals=[],
         )
 
+    supporting_signals = await _candidates_to_suggestions(db, combined[:3])
     plan = await _plan_for_signal_ids(db, signal_ids)
     if plan.recommended_action != RecommendedAction.MVP:
         return MvpIdeaSuggestion(
@@ -1008,6 +1011,7 @@ async def build_mvp_idea(
             system_type="editorial and signal review workflow",
             portfolio_fit=_portfolio_fit(combined, plan.recommended_action),
             signal_ids=signal_ids,
+            supporting_signals=supporting_signals[:3],
         )
 
     return MvpIdeaSuggestion(
@@ -1024,6 +1028,7 @@ async def build_mvp_idea(
         system_type=_system_type(combined, plan.recommended_action),
         portfolio_fit=_portfolio_fit(combined, plan.recommended_action),
         signal_ids=signal_ids,
+        supporting_signals=supporting_signals[:3],
     )
 
 

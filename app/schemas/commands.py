@@ -66,3 +66,7 @@ class MvpIdeaSuggestion(BaseModel):
     system_type: str
     portfolio_fit: str
     signal_ids: list[int] = Field(default_factory=list, max_length=3)
+    supporting_signals: list[SignalSuggestion] = Field(
+        default_factory=list,
+        max_length=3,
+    )

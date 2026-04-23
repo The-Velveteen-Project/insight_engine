@@ -91,6 +91,7 @@ async def test_run_weekly_mvp_scan_job_sends_message(monkeypatch) -> None:
                         "system_type": "editorial and signal review workflow",
                         "portfolio_fit": "Fits the lab conservatively.",
                         "signal_ids": [1],
+                        "supporting_signals": [],
                     },
                 )()
             ),
@@ -104,7 +105,7 @@ async def test_run_weekly_mvp_scan_job_sends_message(monkeypatch) -> None:
 
     mock_send.assert_awaited_once()
     assert mock_send.await_args.args[0] == 1234
-    assert "Ideas de MVP" in mock_send.await_args.args[1]
+    assert "Lectura de build" in mock_send.await_args.args[1]
 
 
 def test_build_scheduler_returns_none_when_disabled(monkeypatch) -> None:

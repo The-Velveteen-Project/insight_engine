@@ -247,7 +247,7 @@ async def test_handle_command_papers_formats_results(db: aiosqlite.Connection) -
     assert f"#{signal_id}" in response
     assert "nota técnica" in response
     assert 'href="https://arxiv.org/abs/2401.10001"' in response
-    assert "Para avanzar" in response
+    assert "Si quieres, yo seguiría por aquí" in response
 
 
 async def test_handle_command_github_insights_formats_results(
@@ -387,8 +387,9 @@ async def test_handle_command_weekly_uses_summary_formatter(
         response = await handle_command("/weekly", db)
 
     assert "Resumen semanal" in response
-    assert "Editorial:" in response
-    assert "Próximo:" in response
+    assert "Mi lectura" in response
+    assert "Qué haría ahora" in response
+    assert "Si quieres, yo seguiría por aquí" in response
 
 
 async def test_handle_command_mvp_ideas_formats_output(
@@ -414,9 +415,10 @@ async def test_handle_command_mvp_ideas_formats_output(
     ):
         response = await handle_command("/mvp_ideas dengue surveillance", db)
 
-    assert "Ideas de MVP" in response
+    assert "Idea de MVP" in response
     assert "<code>mvp</code>" in response
-    assert "Para continuar" in response
+    assert "Mi decisión hoy es" in response
+    assert "Si quieres, yo seguiría por aquí" in response
 
 
 def test_format_signal_suggestions_is_conservative_for_weak_evidence() -> None:
@@ -476,9 +478,73 @@ def test_format_signal_suggestions_prefers_note_when_evidence_is_mixed() -> None
         ],
     )
 
-    assert "señales" in text
-    assert "post" in text
+    assert "Señales mezcladas" in text
+    assert "note" in text or "nota técnica" in text
     assert "abrir fuente" in text
+
+
+def test_format_weekly_summary_is_more_explanatory() -> None:
+    summary = WeeklySummary(
+        query="agentic workflows climate risk",
+        top_signals=[
+            SignalSuggestion(
+                signal_id=4,
+                title="Useful signal",
+                why_it_matters="A concrete applied signal with portfolio implications.",
+                suggested_action=RecommendedAction.NOTE,
+                relevance_score=0.71,
+                source_label="GitHub REST",
+                url="https://example.com/useful",
+            )
+        ],
+        editorial_action=RecommendedAction.NOTE,
+        editorial_angle="Turn this into a narrow technical note.",
+        mvp_action=RecommendedAction.NOTE,
+        mvp_summary="There is still not enough evidence for a build.",
+        next_step="Turn signal #4 into a technical note and keep the scope narrow.",
+    )
+
+    text = telegram_formatting.format_weekly_summary(summary)
+
+    assert "Foco que tomé esta semana" in text
+    assert "Lo que me pareció más defendible" in text
+    assert "Por qué me importa" in text
+    assert "Mi lectura" in text
+    assert "Qué haría ahora" in text
+    assert 'href="https://example.com/useful"' in text
+
+
+def test_format_mvp_idea_uses_build_reading_title_when_not_mvp() -> None:
+    idea = MvpIdeaSuggestion(
+        query="agentic workflows climate risk",
+        recommended_action=RecommendedAction.POST,
+        thesis="There is a clearer editorial angle than build opportunity.",
+        problem="The evidence is not strong enough for an MVP yet.",
+        why_it_matters="A build here would be premature.",
+        possible_sources=["GitHub REST", "arXiv API"],
+        system_type="editorial and signal review workflow",
+        portfolio_fit="Better as a note or post for now.",
+        signal_ids=[1],
+        supporting_signals=[
+            SignalSuggestion(
+                signal_id=1,
+                title="Repo signal",
+                why_it_matters="Concrete but still not enough for a build.",
+                suggested_action=RecommendedAction.POST,
+                relevance_score=0.58,
+                source_label="GitHub REST",
+                url="https://example.com/repo",
+            )
+        ],
+    )
+
+    text = telegram_formatting.format_mvp_idea(idea)
+
+    assert "Lectura de build" in text
+    assert "Mi decisión hoy es" in text
+    assert "Señales que sostienen esta lectura" in text
+    assert 'href="https://example.com/repo"' in text
+    assert "Encaje con Velveteen" in text
 
 
 def test_format_plan_summary_shows_angle_not_only_why() -> None:
@@ -491,7 +557,7 @@ def test_format_plan_summary_shows_angle_not_only_why() -> None:
 
     text = telegram_formatting.format_plan_summary(persisted)
 
-    assert "Ángulo:" in text
+    assert "Ángulo propuesto" in text
     assert "Use the signal to frame one concrete technical angle" in text
 
 
@@ -1011,7 +1077,7 @@ async def test_handle_operator_text_returns_short_version_for_last_draft(
     mock_get.assert_awaited_once_with(db, 13)
     assert response is not None
     assert "Draft #13 — versión corta" in response
-    assert "CTA:" in response
+    assert "CTA sugerido" in response
 
 
 async def test_handle_operator_text_muestramelo_prefers_last_draft(
@@ -1061,4 +1127,4 @@ async def test_handle_operator_text_returns_note_capture_ack(
         chat_id=704,
     )
     assert response is not None
-    assert "Registrado" in response
+    assert "Registrado como nota manual" in response

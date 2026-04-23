@@ -1,12 +1,12 @@
 """
-Helpers to format compact Telegram responses with HTML escaping.
+Helpers to format readable Telegram responses with HTML escaping.
 
 Tone principles:
 - Spanish first, Spanish-speaker friendly.
 - Direct and first-person where appropriate. No machine-output labels.
 - Technical terms (plan, draft, archive, note, post, mvp) stay in English
   because that's how the commands work — mixing is intentional and clear.
-- Compact: each message fits comfortably on a phone screen.
+- Readability-first: explain enough for the message to stand on its own.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def format_help() -> str:
                 "hasta plan o draft."
             ),
             "",
-            "Ejemplos:",
+            "Cómo suelo servir mejor:",
             "• /start",
             "• signals membrane filtration",
             "• papers dengue surveillance",
@@ -72,10 +72,10 @@ def format_greeting() -> str:
             "<b>Velveteen Operator</b>",
             (
                 "Hola, Carlos. Puedo buscar señales, enseñarte links útiles "
-                "y ordenar una línea hasta plan o draft."
+                "y ordenar una línea hasta plan o draft sin perder el hilo."
             ),
             "",
-            "Puedes pedirme cosas como:",
+            "Si quieres empezar simple:",
             "• signals climate risk",
             "• papers agentic workflows",
             "• github_insights",
@@ -200,6 +200,10 @@ def format_soft_unknown(text: str) -> str:
     return "\n".join(
         [
             f"No entendí eso: <code>{escape_text(compact_text(text, 120))}</code>",
+            (
+                "Puedo ayudarte a buscar señales, cruzarlas con GitHub, "
+                "mover una línea a plan o revisar qué haría yo ahora."
+            ),
             "Prueba con: signals X · papers X · github_insights · weekly",
         ]
     )
@@ -248,17 +252,25 @@ def _signal_take(suggestions: list[SignalSuggestion]) -> str:
     dominant = Counter(actions).most_common(1)[0][0]
     mixed = len(set(actions)) > 1
 
+    if mixed and top_score < 0.70:
+        return "Señales mezcladas — trataría como note antes que forzar un MVP."
     if dominant == RecommendedAction.MVP and top_score >= 0.75 and not mixed:
         return "Vale la pena probar un build pequeño y acotado."
     if dominant == RecommendedAction.NOTE and not mixed:
         return "Lo más sensato es una nota técnica sobria."
     if dominant == RecommendedAction.POST:
         return "Da para un post claro, no para build todavía."
-    if mixed and top_score < 0.70:
-        return "Señales mezcladas — trataría como note antes que forzar un MVP."
     if top_score < _WEAK_SIGNAL_THRESHOLD:
         return "Mi lectura: por ahora no la usaría como base editorial."
     return "Mi lectura: todavía la trataría con mucha cautela."
+
+
+def _query_line(label: str, query: str) -> str:
+    return f"{label}: <code>{escape_text(compact_text(query, 200))}</code>"
+
+
+def _continuation_line(text: str) -> str:
+    return f"Si quieres, yo seguiría por aquí: {text}"
 
 
 def _signal_link(title: str, url: str | None) -> str:
@@ -275,8 +287,8 @@ def _render_signal_item(suggestion: SignalSuggestion) -> list[str]:
     why_text = _readable_text(suggestion.why_it_matters, limit=220)
     lines = [
         f"• <code>{escape_text(source)}</code> · {title}",
-        f"  score {suggestion.relevance_score:.2f}",
-        f"  {why_text}",
+        f"  Score: {suggestion.relevance_score:.2f}",
+        f"  Por qué me importa: {why_text}",
     ]
     if suggestion.url:
         lines.append(f'  ↗ <a href="{escape_text(suggestion.url)}">abrir fuente</a>')
@@ -298,8 +310,8 @@ def format_signal_suggestions(
     lines = [f"<b>{escape_text(heading)}</b>"]
     nq = normalized_query.strip()
     if nq:
-        lines.append(f"Búsqueda usada: <code>{escape_text(nq)}</code>")
-    lines.extend([f"{lead} {take}", ""])
+        lines.append(_query_line("Búsqueda usada", nq))
+    lines.extend([lead, take, ""])
 
     visible = suggestions if top_score >= _SOLID_SIGNAL_THRESHOLD else suggestions[:2]
     lines.append(
@@ -317,6 +329,7 @@ def format_signal_suggestions(
                 "Qué haría ahora:",
                 "• reformular la búsqueda con un término más técnico",
                 "• probar papers o news por separado",
+                "• usar el resultado como exploración, no como base editorial todavía",
             ]
         )
         return "\n".join(lines)
@@ -327,8 +340,10 @@ def format_signal_suggestions(
         lines.extend(
             [
                 "",
-                f"Para avanzar: <code>plan {first.signal_id}</code> "
-                f"(como {action_str})",
+                _continuation_line(
+                    f"<code>plan {first.signal_id}</code> "
+                    f"si quieres convertir la señal más defendible en {action_str}"
+                ),
             ]
         )
     return "\n".join(lines)
@@ -341,12 +356,16 @@ def format_no_signals(heading: str, normalized_query: str = "") -> str:
     ]
     nq = normalized_query.strip()
     if nq:
-        lines.append(f"Probé esta búsqueda: <code>{escape_text(nq)}</code>")
+        lines.append(_query_line("Probé esta búsqueda", nq))
     lines.extend(
         [
             "Qué intentaría ahora:",
             "• un término más específico",
             "• papers X o news X por separado",
+            (
+                "• una formulación más cercana al problema técnico real "
+                "que quieres investigar"
+            ),
         ]
     )
     return "\n".join(lines)
@@ -354,33 +373,43 @@ def format_no_signals(heading: str, normalized_query: str = "") -> str:
 
 def format_weekly_summary(summary: WeeklySummary) -> str:
     if summary.mvp_action == RecommendedAction.MVP:
-        take = "Hay base para explorar una línea de MVP pequeña."
+        take = "Esta semana sí veo base para explorar una línea de MVP pequeña."
     elif summary.editorial_action == RecommendedAction.NOTE:
         take = "Esta semana empujaría una nota técnica, no un build."
     elif summary.editorial_action == RecommendedAction.POST:
-        take = "Mejor ángulo editorial que técnico para construir."
+        take = "La oportunidad se ve más editorial que constructiva."
     else:
-        take = "Semana conservadora — archivaría esta línea por ahora."
+        take = (
+            "Semana conservadora: no veo suficiente base como para "
+            "empujar esta línea."
+        )
 
     action_label = _action_label(summary.editorial_action)
     lines = [
         "<b>Resumen semanal</b>",
-        f"Foco: <code>{escape_text(summary.query)}</code>",
+        _query_line("Foco que tomé esta semana", summary.query),
         take,
         "",
-        "Señales:",
+        "Lo que me pareció más defendible:",
     ]
     for signal in summary.top_signals:
-        prefix = f"#{signal.signal_id} " if signal.signal_id else ""
-        lines.append(f"• {escape_text(prefix + compact_text(signal.title, 140))}")
+        lines.extend(_render_signal_item(signal))
     lines.extend(
         [
             "",
-            f"Editorial: <code>{escape_text(action_label)}</code>"
-            f" — {_readable_text(summary.editorial_angle, limit=180)}",
-            f"MVP: <code>{escape_text(summary.mvp_action.value)}</code>"
-            f" — {_readable_text(summary.mvp_summary, limit=180)}",
-            f"Próximo: {_readable_text(summary.next_step, limit=180)}",
+            "<b>Mi lectura</b>",
+            (
+                "Editorialmente la movería como "
+                f"<code>{escape_text(action_label)}</code>: "
+                f"{_readable_text(summary.editorial_angle, limit=220)}"
+            ),
+            (
+                "Sobre build, mi lectura hoy es "
+                f"<code>{escape_text(summary.mvp_action.value)}</code>: "
+                f"{_readable_text(summary.mvp_summary, limit=220)}"
+            ),
+            "",
+            f"<b>Qué haría ahora</b>\n{_readable_text(summary.next_step, limit=220)}",
             "",
         ]
     )
@@ -388,44 +417,89 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
         (s.signal_id for s in summary.top_signals if s.signal_id is not None), None
     )
     if first_id is not None:
-        lines.append(
-            f"Para continuar: <code>plan {first_id}</code> o <code>weekly</code>"
-        )
+        lines.append(_continuation_line(f"<code>plan {first_id}</code>"))
     else:
-        lines.append("Para continuar: <code>weekly</code>")
+        lines.append(_continuation_line("<code>weekly</code>"))
     return "\n".join(lines)
 
 
 def format_mvp_idea(idea: MvpIdeaSuggestion) -> str:
     signal_text = ", ".join(str(s) for s in idea.signal_ids) or "—"
     is_mvp = idea.recommended_action == RecommendedAction.MVP
-    take = "Sí probaría un MVP pequeño." if is_mvp else "No forzaría un build todavía."
+    title = "Idea de MVP" if is_mvp else "Lectura de build"
+    take = (
+        "Sí probaría un MVP pequeño y muy acotado."
+        if is_mvp
+        else "No forzaría un build todavía."
+    )
     lines = [
-        "<b>Ideas de MVP</b>",
-        f"Query: <code>{escape_text(idea.query)}</code>",
-        f"Decisión: <code>{escape_text(idea.recommended_action.value)}</code> — {take}",
+        f"<b>{title}</b>",
+        _query_line("Línea que revisé", idea.query),
+        (
+            "Mi decisión hoy es "
+            f"<code>{escape_text(idea.recommended_action.value)}</code>. {take}"
+        ),
         "",
-        _readable_text(idea.thesis, limit=220),
-        _readable_text(idea.why_it_matters, limit=220),
+        "<b>Mi lectura</b>",
+        _readable_text(idea.thesis, limit=260),
+        _readable_text(idea.why_it_matters, limit=260),
         "",
-        f"Fuentes: {escape_text(', '.join(idea.possible_sources))}",
-        f"Señales: <code>{signal_text}</code>",
+        (
+            "<b>Por qué no la tomaría más grande</b>"
+            if not is_mvp
+            else "<b>Qué tendría que probar</b>"
+        ),
+        _readable_text(idea.problem, limit=240),
+        "",
     ]
+    if idea.supporting_signals:
+        lines.append("<b>Señales que sostienen esta lectura</b>")
+        for signal in idea.supporting_signals:
+            lines.extend(_render_signal_item(signal))
+        lines.append("")
+
+    lines.extend(
+        [
+            f"Fuentes consultadas: {escape_text(', '.join(idea.possible_sources))}",
+            f"Señales persistidas: <code>{signal_text}</code>",
+            f"Tipo de sistema sugerido: {_readable_text(idea.system_type, limit=200)}",
+            f"Encaje con Velveteen: {_readable_text(idea.portfolio_fit, limit=220)}",
+        ]
+    )
     if idea.signal_ids:
-        lines.append(f"\nPara continuar: <code>plan {idea.signal_ids[0]}</code>")
+        lines.append("")
+        if is_mvp:
+            lines.append(
+                _continuation_line(
+                    f"<code>plan {idea.signal_ids[0]}</code> y, "
+                    "si lo apruebas, luego <code>mvp_handoff</code>"
+                )
+            )
+        else:
+            lines.append(
+                _continuation_line(
+                    f"<code>plan {idea.signal_ids[0]}</code> "
+                    "si quieres convertir esta lectura en note o post"
+                )
+            )
     return "\n".join(lines)
 
 
 def format_note_capture_ack(text: str) -> str:
     return "\n".join(
         [
-            "Registrado.",
+            "Registrado como nota manual.",
             f"<code>{escape_text(compact_text(text, 220))}</code>",
             "",
-            "Rutas posibles:",
-            "• <code>signals</code> sobre este tema",
-            "• <code>papers</code> sobre esto",
-            "• <code>qué sigue</code>",
+            "Con esto puedo ayudarte de tres formas:",
+            "• buscar señales relacionadas afuera",
+            "• buscar papers sobre este tema",
+            "• sugerir qué haría yo ahora con esta línea",
+            "",
+            (
+                "Prueba con: <code>signals</code> · <code>papers</code> "
+                "· <code>qué sigue</code>"
+            ),
         ]
     )
 
@@ -465,11 +539,12 @@ def format_plan_summary(
         f"{action_str} · confianza {proposal.confidence:.2f}",
         f"Señales: <code>{escape_text(signal_text)}</code>",
         "",
+        "<b>Por qué movería esta línea</b>",
         why_text,
         "",
-        f"Ángulo: {_readable_text(proposal.angle, limit=200)}",
+        f"<b>Ángulo propuesto</b>\n{_readable_text(proposal.angle, limit=220)}",
         "",
-        _plan_next_hint(plan),
+        f"<b>Siguiente paso sugerido</b>\n{_plan_next_hint(plan)}",
     ]
     return "\n".join(lines)
 
@@ -483,7 +558,7 @@ def format_draft_short_version(draft: PersistedEditorialDraft) -> str:
             "",
             _readable_text(content.short_version, limit=500),
             "",
-            f"CTA: {_readable_text(content.cta, limit=180)}",
+            f"CTA sugerido: {_readable_text(content.cta, limit=180)}",
         ]
     )
 
@@ -500,11 +575,13 @@ def format_draft_summary(
         f"<code>{escape_text(draft.status.value)}</code> · plan #{draft.plan_id}",
         "",
         f"<i>{_readable_text(content.working_title, limit=180)}</i>",
+        "",
+        "<b>Versión corta</b>",
         _readable_text(content.short_version, limit=320),
         "",
-        f"CTA: {_readable_text(content.cta, limit=180)}",
+        f"CTA sugerido: {_readable_text(content.cta, limit=180)}",
         "",
-        "Para ver completo: <code>muéstramelo</code>",
+        _continuation_line("<code>muéstramelo</code> para ver el cuerpo completo"),
     ]
     return "\n".join(lines)
 
@@ -515,12 +592,18 @@ def format_mvp_handoff_summary(pack: MvpHandoffPack) -> str:
         "<b>MVP handoff listo</b>",
         f"Plan: <code>#{pack.plan_id}</code> · señales: <code>{signal_text}</code>",
         "",
-        _readable_text(pack.thesis, limit=220),
-        _readable_text(pack.scope_summary, limit=260),
+        "<b>Tesis</b>",
+        _readable_text(pack.thesis, limit=240),
+        "",
+        "<b>Scope sugerido</b>",
+        _readable_text(pack.scope_summary, limit=280),
         "",
         f"Builder: <code>{escape_text(pack.builder_target)}</code>",
         f"Auditor: <code>{escape_text(pack.auditor_target)}</code>",
         "",
-        "Siguiente: copia el builder prompt al modelo que vayas a usar.",
+        _continuation_line(
+            "copiar el builder prompt al modelo que vayas a usar y "
+            "reservar el auditor para revisar el resultado"
+        ),
     ]
     return "\n".join(lines)
