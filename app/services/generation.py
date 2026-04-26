@@ -12,9 +12,19 @@ from typing import Protocol, runtime_checkable
 
 from app.core.config import settings
 from app.prompts.drafts import DRAFT_SYSTEM_PROMPT, build_draft_prompt
-from app.prompts.editorial import EDITORIAL_SYSTEM_PROMPT, build_editorial_prompt
+from app.prompts.editorial import (
+    EDITORIAL_SYSTEM_PROMPT,
+    WEEKLY_THESIS_SYSTEM_PROMPT,
+    build_editorial_prompt,
+    build_weekly_thesis_prompt,
+)
 from app.schemas.drafts import DraftGenerationInput, EditorialDraftContent
-from app.schemas.editorial import EditorialGenerationInput, GeneratedEditorialDraft
+from app.schemas.editorial import (
+    EditorialGenerationInput,
+    GeneratedEditorialDraft,
+    WeeklyThesis,
+    WeeklyThesisGenerationInput,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +43,14 @@ class StructuredDraftGenerator(Protocol):
         self,
         context: DraftGenerationInput,
     ) -> EditorialDraftContent | None: ...
+
+
+@runtime_checkable
+class StructuredWeeklyThesisGenerator(Protocol):
+    async def generate(
+        self,
+        context: WeeklyThesisGenerationInput,
+    ) -> WeeklyThesis | None: ...
 
 
 class OpenAIEditorialGenerator:
@@ -121,8 +139,59 @@ class OpenAIDraftGenerator:
             return None
 
 
+class OpenAIWeeklyThesisGenerator:
+    """
+    Structured weekly-thesis generation via the Responses API.
+
+    Produces the opening paragraph of the weekly digest and the proactive
+    handoff flag, using the same Pydantic-structured-output pattern as the
+    editorial generator. Returns None on failure so the caller can fall back
+    to a deterministic synthesis.
+    """
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+    ) -> None:
+        from openai import AsyncOpenAI
+
+        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+        self._model = model
+
+    async def _parse_structured_response(
+        self,
+        context: WeeklyThesisGenerationInput,
+    ) -> WeeklyThesis | None:
+        response = await self._client.responses.parse(
+            model=self._model,
+            instructions=WEEKLY_THESIS_SYSTEM_PROMPT,
+            input=build_weekly_thesis_prompt(context),
+            text_format=WeeklyThesis,
+            max_output_tokens=600,
+            temperature=0.3,
+        )
+        parsed = getattr(response, "output_parsed", None)
+        if not isinstance(parsed, WeeklyThesis):
+            logger.warning("Weekly thesis generation returned no structured output.")
+            return None
+        return parsed
+
+    async def generate(
+        self,
+        context: WeeklyThesisGenerationInput,
+    ) -> WeeklyThesis | None:
+        try:
+            return await self._parse_structured_response(context)
+        except Exception as exc:
+            logger.warning("Weekly thesis generation failed: %s", exc)
+            return None
+
+
 _generator: OpenAIEditorialGenerator | None = None
 _draft_generator: OpenAIDraftGenerator | None = None
+_weekly_thesis_generator: OpenAIWeeklyThesisGenerator | None = None
 
 
 def get_editorial_generator() -> OpenAIEditorialGenerator | None:
@@ -151,3 +220,22 @@ def get_draft_generator() -> OpenAIDraftGenerator | None:
             settings.editorial_model,
         )
     return _draft_generator
+
+
+def get_weekly_thesis_generator() -> OpenAIWeeklyThesisGenerator | None:
+    global _weekly_thesis_generator
+    if (
+        _weekly_thesis_generator is None
+        and settings.openai_api_key
+        and settings.weekly_use_llm_thesis
+    ):
+        _weekly_thesis_generator = OpenAIWeeklyThesisGenerator(
+            api_key=settings.openai_api_key,
+            model=settings.editorial_model,
+            timeout_seconds=settings.weekly_thesis_timeout_seconds,
+        )
+        logger.info(
+            "OpenAIWeeklyThesisGenerator initialized (model=%s).",
+            settings.editorial_model,
+        )
+    return _weekly_thesis_generator

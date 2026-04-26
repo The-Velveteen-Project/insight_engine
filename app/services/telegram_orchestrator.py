@@ -22,6 +22,7 @@ import aiosqlite
 from app.core.config import settings
 from app.db.queries import (
     get_signal_by_source_identity,
+    get_signals_by_ids,
     get_telegram_session,
     upsert_telegram_session,
 )
@@ -37,8 +38,11 @@ from app.schemas.drafts import PersistedEditorialDraft
 from app.schemas.editorial import (
     EditorialPlan,
     EditorialPlanStatus,
+    EditorialSignalContext,
     PersistedEditorialPlan,
     RecommendedAction,
+    WeeklyThesis,
+    WeeklyThesisGenerationInput,
 )
 from app.schemas.github import GitHubInsightCandidate
 from app.schemas.mvp_handoff import MvpHandoffPack
@@ -49,6 +53,7 @@ from app.services import (
     github_insight_service,
     mvp_handoff,
 )
+from app.services.generation import get_weekly_thesis_generator
 from app.utils import telegram_formatting
 
 logger = logging.getLogger(__name__)
@@ -900,6 +905,130 @@ def _next_step(plan: EditorialPlan, signal_ids: list[int]) -> str:
     return f"Archive {signal_ref} for now and wait for stronger convergence."
 
 
+def _row_to_signal_context(row: aiosqlite.Row) -> EditorialSignalContext:
+    return EditorialSignalContext(
+        id=int(row["id"]),
+        source_type=str(row["source_type"]),
+        source_id=str(row["source_id"]) if row["source_id"] is not None else None,
+        title=str(row["title"] or ""),
+        summary=str(row["summary"] or ""),
+        url=str(row["url"]) if row["url"] is not None else None,
+        relevance_score=float(row["relevance_score"] or 0.0),
+        relevance_note=str(row["relevance_note"] or ""),
+        message_id=int(row["message_id"]) if row["message_id"] is not None else None,
+    )
+
+
+def _deterministic_weekly_thesis(
+    signal_contexts: list[EditorialSignalContext],
+    plan: EditorialPlan,
+    *,
+    focus: str,
+    focus_label: str | None,
+    active_goal: str | None,
+) -> WeeklyThesis:
+    sources = {signal.source_type for signal in signal_contexts}
+    has_own_repo = "github" in sources
+    has_external = bool({"arxiv", "hackernews"} & sources)
+    is_mvp = plan.recommended_action == RecommendedAction.MVP
+
+    if has_own_repo and has_external:
+        opener = (
+            "Esta semana tu trabajo propio y el material externo se cruzan en "
+            f"el mismo eje ({focus}). Hay base para tratarlos como un solo "
+            "movimiento editorial, no como tres signals sueltos."
+        )
+        strong = True
+    elif has_external and not has_own_repo:
+        opener = (
+            "Esta semana las señales fuertes vienen del material externo: "
+            f"vale la pena leerlas con foco en {focus} y decidir si conectan "
+            "con alguna línea propia que ya estés moviendo."
+        )
+        strong = True
+    elif has_own_repo and not has_external:
+        opener = (
+            "Esta semana la actividad propia carga el brief, sin material "
+            "externo defendible. Es un buen momento para apuntalar tu repo "
+            "antes de buscar tracción afuera."
+        )
+        strong = False
+    else:
+        opener = (
+            "Esta semana las señales son útiles pero sueltas: no veo una "
+            "tesis fuerte que las una más allá del foco general."
+        )
+        strong = False
+
+    if active_goal:
+        opener += (
+            f" Para tu objetivo activo ({active_goal}), conviene revisarlas "
+            "con la pregunta de si te acercan en este horizonte o son ruido "
+            "interesante."
+        )
+
+    handoff_reason: str | None = None
+    if is_mvp and has_own_repo and has_external:
+        handoff_reason = (
+            "El paper externo más tu repo dan sustancia para scopear un build "
+            "de una semana sobre el mismo eje, sin forzar el alcance."
+        )
+    elif is_mvp:
+        handoff_reason = (
+            "La línea editorial propuesta tiene tracción de MVP. Vale la pena "
+            "decidir si lo armas ahora o lo dejas como nota."
+        )
+
+    if focus_label:
+        opener = f"Sub-foco de la semana: {focus_label}. " + opener
+
+    return WeeklyThesis(
+        opening_paragraph=opener,
+        has_strong_thesis=strong,
+        suggests_handoff=is_mvp,
+        handoff_reason=handoff_reason,
+    )
+
+
+async def _resolve_weekly_thesis(
+    signal_contexts: list[EditorialSignalContext],
+    plan: EditorialPlan,
+    *,
+    focus: str,
+    focus_label: str | None,
+    active_goal: str | None,
+) -> tuple[WeeklyThesis, bool]:
+    """Returns (thesis, llm_used). Falls back to deterministic on any failure."""
+    generator = get_weekly_thesis_generator()
+    if generator is not None:
+        try:
+            generated = await generator.generate(
+                WeeklyThesisGenerationInput(
+                    weekly_focus=focus,
+                    focus_label=focus_label or None,
+                    active_goal=active_goal or None,
+                    chosen_action=plan.recommended_action,
+                    chosen_angle=plan.angle,
+                    signals=signal_contexts,
+                )
+            )
+        except Exception as exc:  # belt-and-suspenders
+            logger.warning("Weekly thesis generation raised: %s", exc)
+            generated = None
+        if generated is not None:
+            return generated, True
+    return (
+        _deterministic_weekly_thesis(
+            signal_contexts,
+            plan,
+            focus=focus,
+            focus_label=focus_label,
+            active_goal=active_goal,
+        ),
+        False,
+    )
+
+
 async def build_weekly_summary(
     db: aiosqlite.Connection,
     *,
@@ -914,6 +1043,7 @@ async def build_weekly_summary(
         key=lambda item: item.relevance_score,
         reverse=True,
     )
+    signals_evaluated = len(combined)
     if not combined:
         return None
 
@@ -929,6 +1059,28 @@ async def build_weekly_summary(
         message_id=message_id,
         candidate_refs=combined,
     )
+
+    signal_rows = await get_signals_by_ids(db, signal_ids)
+    signal_contexts = [_row_to_signal_context(row) for row in signal_rows]
+
+    focus_label = settings.weekly_focus_label.strip() or None
+    active_goal = settings.active_goal_text.strip() or None
+
+    thesis: WeeklyThesis | None = None
+    llm_used = False
+    if signal_contexts:
+        thesis, llm_used = await _resolve_weekly_thesis(
+            signal_contexts,
+            plan,
+            focus=resolved_query,
+            focus_label=focus_label,
+            active_goal=active_goal,
+        )
+
+    handoff_proposal: str | None = None
+    if thesis is not None and thesis.suggests_handoff and thesis.handoff_reason:
+        handoff_proposal = thesis.handoff_reason
+
     return WeeklySummary(
         query=resolved_query,
         top_signals=suggestions[:3],
@@ -937,6 +1089,12 @@ async def build_weekly_summary(
         mvp_action=mvp_idea.recommended_action,
         mvp_summary=mvp_idea.thesis,
         next_step=_next_step(plan, signal_ids),
+        thesis_paragraph=thesis.opening_paragraph if thesis is not None else None,
+        handoff_proposal=handoff_proposal,
+        signals_evaluated=signals_evaluated,
+        focus_label=focus_label,
+        active_goal=active_goal,
+        llm_thesis_used=llm_used,
     )
 
 

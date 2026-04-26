@@ -386,10 +386,11 @@ async def test_handle_command_weekly_uses_summary_formatter(
     ):
         response = await handle_command("/weekly", db)
 
-    assert "Resumen semanal" in response
+    assert "Velveteen Operator — Weekly" in response
+    assert "Lo que vi esta semana" in response
     assert "Mi lectura" in response
-    assert "Qué haría ahora" in response
-    assert "Si quieres, yo seguiría por aquí" in response
+    assert "Por dónde seguiría yo" in response
+    assert "…" not in response
 
 
 async def test_handle_command_mvp_ideas_formats_output(
@@ -502,16 +503,124 @@ def test_format_weekly_summary_is_more_explanatory() -> None:
         mvp_action=RecommendedAction.NOTE,
         mvp_summary="There is still not enough evidence for a build.",
         next_step="Turn signal #4 into a technical note and keep the scope narrow.",
+        thesis_paragraph=(
+            "Esta semana hay convergencia entre tu repo y el material externo. "
+            "La línea más fuerte apunta a una nota técnica."
+        ),
+        signals_evaluated=12,
     )
 
     text = telegram_formatting.format_weekly_summary(summary)
 
-    assert "Foco que tomé esta semana" in text
-    assert "Lo que me pareció más defendible" in text
-    assert "Por qué me importa" in text
+    assert "Velveteen Operator — Weekly" in text
+    assert "🐇" in text
+    assert "Lo que vi esta semana" in text
+    assert "convergencia entre tu repo" in text
+    assert "Señales que pasaron el filtro editorial" in text
+    assert "(de 12 vistas)" in text
+    assert "Por qué te sirve" in text
     assert "Mi lectura" in text
-    assert "Qué haría ahora" in text
+    assert "Por dónde seguiría yo" in text
     assert 'href="https://example.com/useful"' in text
+    assert "…" not in text
+    assert "Score:" not in text
+
+
+def test_format_weekly_summary_renders_handoff_proposal_when_set() -> None:
+    summary = WeeklySummary(
+        query="agentic workflows applied research",
+        top_signals=[
+            SignalSuggestion(
+                signal_id=7,
+                title="Agentic AI for Science Automation",
+                why_it_matters="Te da el frame conceptual para articular el ángulo.",
+                suggested_action=RecommendedAction.MVP,
+                relevance_score=0.90,
+                source_label="arXiv API",
+                url="https://example.com/paper",
+            )
+        ],
+        editorial_action=RecommendedAction.MVP,
+        editorial_angle="Construir un MVP mínimo scopeado a una semana.",
+        mvp_action=RecommendedAction.MVP,
+        mvp_summary="MVP is the right move.",
+        next_step="Promote into a plan and scope a one-week build.",
+        thesis_paragraph=(
+            "Tu repo y el paper externo convergen en el mismo eje editorial."
+        ),
+        handoff_proposal=(
+            "El paper más tu repo dan sustancia para scopear un build de una semana."
+        ),
+        signals_evaluated=24,
+        active_goal=(
+            "cliente $4k posicionando agentic workflows aplicados"
+        ),
+    )
+
+    text = telegram_formatting.format_weekly_summary(summary)
+
+    assert "Goal activo:" in text
+    assert "MVP handoff" in text
+    assert "¿Te lo armo en cuanto apruebes el plan?" in text
+    assert "Lo que no llegó al brief" in text
+    assert "Las otras 23" in text
+    assert "…" not in text
+
+
+def test_format_weekly_summary_omits_handoff_when_not_proposed() -> None:
+    summary = WeeklySummary(
+        query="agentic workflows",
+        top_signals=[
+            SignalSuggestion(
+                signal_id=4,
+                title="Note-only signal",
+                why_it_matters="Útil para nota técnica acotada.",
+                suggested_action=RecommendedAction.NOTE,
+                relevance_score=0.55,
+                source_label="arXiv API",
+                url="https://example.com/note",
+            )
+        ],
+        editorial_action=RecommendedAction.NOTE,
+        editorial_angle="Una nota técnica sobria.",
+        mvp_action=RecommendedAction.NOTE,
+        mvp_summary="Not enough evidence for a build.",
+        next_step="Turn into a note.",
+        thesis_paragraph="Una semana de notas, no de builds.",
+        signals_evaluated=3,
+    )
+
+    text = telegram_formatting.format_weekly_summary(summary)
+
+    assert "MVP handoff" not in text
+    assert "¿Te lo armo" not in text
+
+
+def test_format_weekly_summary_uses_default_thesis_when_absent() -> None:
+    summary = WeeklySummary(
+        query="agentic workflows",
+        top_signals=[
+            SignalSuggestion(
+                signal_id=1,
+                title="Signal",
+                why_it_matters="Why.",
+                suggested_action=RecommendedAction.NOTE,
+                relevance_score=0.5,
+                source_label="arXiv API",
+            )
+        ],
+        editorial_action=RecommendedAction.NOTE,
+        editorial_angle="Una nota técnica.",
+        mvp_action=RecommendedAction.NOTE,
+        mvp_summary="No build.",
+        next_step="Turn into note.",
+    )
+
+    text = telegram_formatting.format_weekly_summary(summary)
+
+    assert "Lo que vi esta semana" in text
+    # Falls back to a sensible non-empty paragraph, not the old one-liner
+    assert "nota técnica" in text.lower()
 
 
 def test_format_mvp_idea_uses_build_reading_title_when_not_mvp() -> None:
@@ -1116,6 +1225,65 @@ async def test_handle_command_unknown_returns_soft_guidance(
     response = await handle_command("/esto_no_existe", db)
     assert "No entendí" in response
     assert "signals" in response
+
+
+def test_compact_text_never_appends_ellipsis() -> None:
+    long_text = (
+        "Scientific workflow systems automate execution including scheduling, "
+        "fault tolerance, and resource management. This is a long abstract "
+        "that historically would have been chopped at a hard character limit."
+    )
+    out = telegram_formatting.compact_text(long_text, 80)
+    assert "…" not in out
+    assert "..." not in out
+
+
+def test_compact_text_clips_at_sentence_boundary_when_possible() -> None:
+    text = (
+        "Primera frase corta. Segunda frase también razonable. "
+        "Tercera frase que ya no entra dentro del límite establecido."
+    )
+    out = telegram_formatting.compact_text(text, 60)
+    assert out.endswith(".")
+    assert "Primera frase corta." in out
+    assert "Tercera" not in out
+
+
+def test_compact_text_falls_back_to_word_boundary() -> None:
+    text = (
+        "Una sola oración muy larga sin signos de puntuación intermedios "
+        "que no tiene fronteras de oración dentro del límite que vamos a usar"
+    )
+    out = telegram_formatting.compact_text(text, 60)
+    assert "…" not in out
+    assert not out.endswith(" ")
+    assert " " in out  # ended at a word boundary, not mid-word
+
+
+def test_compact_text_returns_full_text_under_limit() -> None:
+    text = "Frase corta."
+    assert telegram_formatting.compact_text(text, 100) == "Frase corta."
+
+
+def test_render_signal_item_omits_score_line_and_uses_te_sirve() -> None:
+    suggestion = SignalSuggestion(
+        signal_id=42,
+        title="Some signal",
+        why_it_matters="Te sirve porque conecta con tu repo.",
+        suggested_action=RecommendedAction.NOTE,
+        relevance_score=0.83,
+        source_label="arXiv API",
+        url="https://example.com/paper",
+    )
+    text = telegram_formatting.format_signal_suggestions(
+        "Señales · test",
+        [suggestion],
+    )
+    assert "Score:" not in text
+    assert "0.83" not in text
+    assert "Por qué te sirve" in text
+    assert "Por qué me importa" not in text
+    assert "…" not in text
 
 
 async def test_handle_operator_text_returns_note_capture_ack(

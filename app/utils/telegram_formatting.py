@@ -27,18 +27,36 @@ _SOLID_SIGNAL_THRESHOLD = 0.45
 _WEAK_SIGNAL_THRESHOLD = 0.25
 
 
+_MIN_TRIM_POSITION = 40
+
+
 def compact_text(text: str, limit: int) -> str:
+    """Whitespace-normalize text and clip cleanly within `limit`.
+
+    Hard rule: never end the result with an ellipsis. If trimming is needed,
+    end at the last sentence boundary within `limit`, falling back to the
+    last word boundary. The degenerate single-huge-word case returns a raw
+    slice without an ellipsis — still no `…` ever appended by this function.
+    """
     compact = " ".join(text.split())
     if len(compact) <= limit:
         return compact
-    return compact[: limit - 1] + "…"
+    window = compact[:limit]
+    for marker in (". ", "? ", "! ", ".\n", "?\n", "!\n"):
+        idx = window.rfind(marker)
+        if idx >= _MIN_TRIM_POSITION:
+            return compact[: idx + 1].rstrip()
+    space_idx = window.rfind(" ")
+    if space_idx >= _MIN_TRIM_POSITION:
+        return compact[:space_idx].rstrip(",;:—-")
+    return window
 
 
 def escape_text(text: str) -> str:
     return escape(text, quote=False)
 
 
-def _readable_text(text: str, *, limit: int = 220) -> str:
+def _readable_text(text: str, *, limit: int = 320) -> str:
     return escape_text(compact_text(text, limit))
 
 
@@ -274,7 +292,7 @@ def _continuation_line(text: str) -> str:
 
 
 def _signal_link(title: str, url: str | None) -> str:
-    label = escape_text(compact_text(title, 160))
+    label = escape_text(compact_text(title, 200))
     if not url:
         return f"<b>{label}</b>"
     return f'<a href="{escape_text(url)}"><b>{label}</b></a>'
@@ -284,11 +302,10 @@ def _render_signal_item(suggestion: SignalSuggestion) -> list[str]:
     id_prefix = f"#{suggestion.signal_id} " if suggestion.signal_id else ""
     source = suggestion.source_label or "fuente"
     title = _signal_link(id_prefix + suggestion.title, suggestion.url)
-    why_text = _readable_text(suggestion.why_it_matters, limit=220)
+    why_text = _readable_text(suggestion.why_it_matters, limit=360)
     lines = [
         f"• <code>{escape_text(source)}</code> · {title}",
-        f"  Score: {suggestion.relevance_score:.2f}",
-        f"  Por qué me importa: {why_text}",
+        f"  Por qué te sirve: {why_text}",
     ]
     if suggestion.url:
         lines.append(f'  ↗ <a href="{escape_text(suggestion.url)}">abrir fuente</a>')
@@ -371,53 +388,116 @@ def format_no_signals(heading: str, normalized_query: str = "") -> str:
     return "\n".join(lines)
 
 
-def format_weekly_summary(summary: WeeklySummary) -> str:
+def _weekly_default_thesis(summary: WeeklySummary) -> str:
+    """Last-resort opener used only if no thesis was generated upstream."""
     if summary.mvp_action == RecommendedAction.MVP:
-        take = "Esta semana sí veo base para explorar una línea de MVP pequeña."
-    elif summary.editorial_action == RecommendedAction.NOTE:
-        take = "Esta semana empujaría una nota técnica, no un build."
-    elif summary.editorial_action == RecommendedAction.POST:
-        take = "La oportunidad se ve más editorial que constructiva."
-    else:
-        take = (
-            "Semana conservadora: no veo suficiente base como para "
-            "empujar esta línea."
+        return (
+            "Esta semana sí veo base para explorar una línea de MVP pequeña, "
+            "anclada en lo que ya estás moviendo."
         )
+    if summary.editorial_action == RecommendedAction.NOTE:
+        return (
+            "Esta semana empujaría una nota técnica acotada antes que un build."
+        )
+    if summary.editorial_action == RecommendedAction.POST:
+        return "La oportunidad se ve más editorial que constructiva esta semana."
+    return (
+        "Semana conservadora: no veo todavía suficiente base como para "
+        "empujar esta línea con criterio."
+    )
 
-    action_label = _action_label(summary.editorial_action)
-    lines = [
-        "<b>Resumen semanal</b>",
-        _query_line("Foco que tomé esta semana", summary.query),
-        take,
-        "",
-        "Lo que me pareció más defendible:",
-    ]
+
+def format_weekly_summary(summary: WeeklySummary) -> str:
+    lines: list[str] = ["🐇 <b>Velveteen Operator — Weekly</b>"]
+    if summary.active_goal:
+        goal_text = _readable_text(summary.active_goal, limit=200)
+        lines.append(f"<i>Goal activo: {goal_text}</i>")
+    if summary.focus_label:
+        lines.append(
+            f"<i>Sub-foco de la semana: "
+            f"{_readable_text(summary.focus_label, limit=160)}</i>"
+        )
+    lines.extend(
+        [
+            "",
+            "<b>Lo que vi esta semana</b>",
+            _readable_text(
+                summary.thesis_paragraph or _weekly_default_thesis(summary),
+                limit=900,
+            ),
+            "",
+        ]
+    )
+
+    extra_seen = (
+        summary.signals_evaluated
+        and summary.signals_evaluated > len(summary.top_signals)
+    )
+    if extra_seen:
+        lines.append(
+            "<b>Señales que pasaron el filtro editorial</b> "
+            f"(de {summary.signals_evaluated} vistas)"
+        )
+    else:
+        lines.append("<b>Señales que pasaron el filtro editorial</b>")
+
     for signal in summary.top_signals:
         lines.extend(_render_signal_item(signal))
+
     lines.extend(
         [
             "",
             "<b>Mi lectura</b>",
-            (
-                "Editorialmente la movería como "
-                f"<code>{escape_text(action_label)}</code>: "
-                f"{_readable_text(summary.editorial_angle, limit=220)}"
-            ),
-            (
-                "Sobre build, mi lectura hoy es "
-                f"<code>{escape_text(summary.mvp_action.value)}</code>: "
-                f"{_readable_text(summary.mvp_summary, limit=220)}"
-            ),
-            "",
-            f"<b>Qué haría ahora</b>\n{_readable_text(summary.next_step, limit=220)}",
-            "",
+            _readable_text(summary.editorial_angle, limit=420),
         ]
     )
+
+    if summary.handoff_proposal:
+        lines.extend(
+            [
+                "",
+                "<b>Veo señal clara de MVP handoff</b>",
+                _readable_text(summary.handoff_proposal, limit=420),
+                "¿Te lo armo en cuanto apruebes el plan?",
+            ]
+        )
+
+    rest = (
+        max(summary.signals_evaluated - len(summary.top_signals), 0)
+        if summary.signals_evaluated
+        else 0
+    )
+    if rest:
+        lines.extend(
+            [
+                "",
+                "<b>Lo que no llegó al brief</b>",
+                (
+                    f"Las otras {rest} señales que entraron esta semana no pasaron "
+                    "el filtro: o eran ruido recurrente, o repetían cosas previas, "
+                    "o eran interesantes en abstracto pero no mueven el dial hoy."
+                ),
+            ]
+        )
+
+    lines.append("")
     first_id = next(
         (s.signal_id for s in summary.top_signals if s.signal_id is not None), None
     )
     if first_id is not None:
-        lines.append(_continuation_line(f"<code>plan {first_id}</code>"))
+        lines.extend(
+            [
+                "<b>Por dónde seguiría yo</b>",
+                (
+                    f"Si te alinea: <code>plan {first_id}</code> y armo el plan "
+                    "agregado."
+                ),
+                (
+                    "Si tienes algo propio en curso (notas, código, una intuición), "
+                    "mándalo y te digo si veo pieza editorial ahí."
+                ),
+            ]
+        )
     else:
         lines.append(_continuation_line("<code>weekly</code>"))
     return "\n".join(lines)

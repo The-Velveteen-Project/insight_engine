@@ -54,6 +54,12 @@ class WeeklySummary(BaseModel):
     mvp_action: RecommendedAction
     mvp_summary: str
     next_step: str
+    thesis_paragraph: str | None = None
+    handoff_proposal: str | None = None
+    signals_evaluated: int = 0
+    focus_label: str | None = None
+    active_goal: str | None = None
+    llm_thesis_used: bool = False
 
 
 class MvpIdeaSuggestion(BaseModel):

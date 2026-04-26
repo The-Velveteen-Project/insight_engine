@@ -52,6 +52,13 @@ class Settings(BaseSettings):
     weekly_summary_cron: str = "0 9 * * 0"
     weekly_mvp_scan_cron: str = "0 9 * * 4"
 
+    # Operator personalization (Sub-phase A — env-driven; full goal model is
+    # planned for Sub-phase B with persistence and a /goal command).
+    active_goal_text: str = ""
+    weekly_focus_label: str = ""
+    weekly_use_llm_thesis: bool = True
+    weekly_thesis_timeout_seconds: float = 12.0
+
     db_path: str = "data/engine.db"
     debug: bool = False
     log_level: str = "INFO"

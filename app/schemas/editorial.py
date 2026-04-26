@@ -91,6 +91,30 @@ class EditorialGenerationInput(BaseModel):
     signals: list[EditorialSignalContext] = Field(min_length=1, max_length=3)
 
 
+class WeeklyThesis(BaseModel):
+    """Editorial opener for a weekly digest.
+
+    The model writes a short paragraph in second person to Carlos that names
+    a pattern across the selected signals (or honestly says no pattern is
+    visible). It also flags whether the planner's MVP signal warrants a
+    proactive handoff suggestion in the same message.
+    """
+
+    opening_paragraph: str = Field(min_length=40, max_length=900)
+    has_strong_thesis: bool
+    suggests_handoff: bool
+    handoff_reason: str | None = Field(default=None, max_length=400)
+
+
+class WeeklyThesisGenerationInput(BaseModel):
+    weekly_focus: str = Field(min_length=4, max_length=240)
+    focus_label: str | None = Field(default=None, max_length=160)
+    active_goal: str | None = Field(default=None, max_length=400)
+    chosen_action: RecommendedAction
+    chosen_angle: str = Field(min_length=8, max_length=240)
+    signals: list[EditorialSignalContext] = Field(min_length=1, max_length=3)
+
+
 class DecisionBasis(BaseModel):
     primary_signal_id: int
     supporting_signal_ids: list[int] = Field(default_factory=list, max_length=2)

@@ -332,25 +332,48 @@ def _angle_hint(
     )
 
 
+def _first_sentence(text: str, max_chars: int = 240) -> str:
+    """Return the first complete sentence of `text`, never mid-word.
+
+    Falls back to a clean word-boundary trim when no sentence ending is found.
+    Never appends ellipsis.
+    """
+    cleaned = " ".join((text or "").split())
+    if not cleaned:
+        return ""
+    if len(cleaned) <= max_chars:
+        return cleaned
+    window = cleaned[:max_chars]
+    for marker in (". ", "? ", "! "):
+        idx = window.rfind(marker)
+        if idx >= 40:
+            return cleaned[: idx + 1].strip()
+    space_idx = window.rfind(" ")
+    if space_idx >= 40:
+        return cleaned[:space_idx].rstrip(",;:—-")
+    return window
+
+
 def _fallback_narrative(
     signals: Sequence[EditorialSignalContext],
     action: RecommendedAction,
 ) -> GeneratedEditorialDraft:
     primary = signals[0]
-    # Use the actual signal summary as the "why" when archiving — more useful
-    # than a generic sentence. Falls back to a short default if summary is empty.
-    summary_excerpt = (primary.summary or "").strip()
-    if len(summary_excerpt) > 100:
-        summary_excerpt = summary_excerpt[:97] + "…"
+    summary_excerpt = _first_sentence(primary.summary or "", max_chars=260)
 
     if action == RecommendedAction.MVP:
         why = (
-            "Las señales convergen en algo construible. "
-            "Vale la pena probar un build pequeño y bien acotado."
+            "Las señales convergen lo suficiente como para que valga la pena "
+            "que armes un build pequeño y muy acotado a partir de aquí. "
+            "Te ayuda a sostener tu línea de agentic workflows aplicados con "
+            "código auditable, no solo con comentario."
         )
-        angle = f"Build mínimo a partir de: {primary.title[:60]}"
+        angle = (
+            "Construir un MVP mínimo, scopeado a una semana, sobre el ángulo "
+            "técnico que sostiene esta señal."
+        )
         outline = DraftOutline(
-            hook="Comenzar desde el problema concreto que implica la señal.",
+            hook="Abrir nombrando el problema concreto que implica la señal.",
             points=[
                 "Definir el scope más pequeño posible y sus restricciones técnicas.",
                 "Describir qué significa éxito y qué medir primero.",
@@ -358,15 +381,19 @@ def _fallback_narrative(
             closing="Cerrar con el experimento más pequeño que vale correr.",
         )
         value = (
-            "Puede convertirse en un artefacto de portfolio que muestre "
-            "criterio técnico y ejecución aplicada."
+            "Puede convertirse en un artefacto de portafolio que muestre "
+            "criterio técnico y ejecución aplicada, alineado con tu marca."
         )
     elif action == RecommendedAction.NOTE:
-        why = (
-            summary_excerpt
-            or "Da para una nota técnica bien acotada sobre método o implicación."
+        why = summary_excerpt or (
+            "Te sirve como una nota técnica acotada: hay un método o una "
+            "lección concreta que vale la pena dejar escrita, sin forzar un "
+            "build todavía."
         )
-        angle = f"Nota técnica: {primary.title[:60]}"
+        angle = (
+            "Una nota técnica sobria que explique la lección y su implicación "
+            "para tu trabajo, sin estirarla en post o build."
+        )
         outline = DraftOutline(
             hook="Abrir con la señal y el problema concreto al que apunta.",
             points=[
@@ -376,15 +403,18 @@ def _fallback_narrative(
             closing="Cerrar con una implicación para builds o investigación futura.",
         )
         value = (
-            "Agrega evidencia de criterio técnico y ayuda a convertir "
+            "Agrega evidencia de criterio técnico y te ayuda a convertir "
             "señales dispersas en trabajo escrito coherente."
         )
     elif action == RecommendedAction.POST:
-        why = (
-            summary_excerpt
-            or "Hay ángulo claro para un post conciso sin necesidad de un build."
+        why = summary_excerpt or (
+            "Hay un ángulo claro para un post breve donde puedes apuntar "
+            "una observación técnica útil, sin comprometerte a un build."
         )
-        angle = f"Un insight público de: {primary.title[:60]}"
+        angle = (
+            "Un insight público breve, con una interpretación técnica honesta "
+            "anclada en la evidencia disponible."
+        )
         outline = DraftOutline(
             hook="Abrir con la señal concreta que vale la pena notar.",
             points=[
@@ -394,15 +424,18 @@ def _fallback_narrative(
             closing="Cerrar con una pregunta abierta que vale seguir.",
         )
         value = (
-            "Mantiene la narrativa pública activa sin sobrecomprometer "
+            "Mantiene tu narrativa pública activa sin sobrecomprometer "
             "en un build o nota más grande."
         )
     else:  # ARCHIVE
-        why = (
-            summary_excerpt
-            or "Sin base suficiente para desarrollar esto ahora."
+        why = summary_excerpt or (
+            "Por ahora la base no da. Mejor archivar y esperar evidencia "
+            "más fuerte antes de empujar esta línea."
         )
-        angle = f"Archivar: {primary.title[:60]}"
+        angle = (
+            "Archivar la señal con una nota corta que explique por qué no es "
+            "el momento y qué evidencia futura la haría revisitable."
+        )
         outline = DraftOutline(
             hook="Nombrar claramente cuál fue la señal.",
             points=[
@@ -412,7 +445,7 @@ def _fallback_narrative(
             closing="Cerrar con la condición mínima para reconsiderar.",
         )
         value = (
-            "Una decisión de archivo clara protege el foco y evita que señales "
+            "Una decisión de archivo clara protege tu foco y evita que señales "
             "débiles generen output ruidoso."
         )
 
