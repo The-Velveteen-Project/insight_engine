@@ -354,6 +354,32 @@ def _first_sentence(text: str, max_chars: int = 240) -> str:
     return window
 
 
+_AGENTIC_TERMS = {
+    "agent", "agentic", "multi-agent", "workflow", "orchestrat",
+    "pipeline", "autonom", "llm", "language model",
+}
+_CLIMATE_TERMS = {"climate", "sustainab", "green", "carbon", "energy", "environmental"}
+_HEALTH_TERMS = {"health", "medical", "clinical", "patient", "hospital"}
+_LATAM_TERMS = {"latam", "latin americ", "global majority", "developing"}
+
+
+def _external_relevance_connection(corpus: str) -> str:
+    """Keyword-based Spanish connection to Carlos's positioning.
+
+    Called only when the LLM is unavailable.  Returns a short phrase that
+    slots into "...{connection} — vale la pena dejarlo escrito." style.
+    """
+    if _has_any(corpus, _AGENTIC_TERMS):
+        return "se cruza con tu línea de agentic workflows aplicados"
+    if _has_any(corpus, _CLIMATE_TERMS):
+        return "entra en tu foco de sostenibilidad y riesgo aplicado"
+    if _has_any(corpus, _HEALTH_TERMS):
+        return "conecta con sistemas aplicados a salud y decisión"
+    if _has_any(corpus, _LATAM_TERMS):
+        return "es relevante para el contexto LATAM que posicionás"
+    return "abre una lección técnica útil para tu posicionamiento"
+
+
 def _fallback_narrative(
     signals: Sequence[EditorialSignalContext],
     action: RecommendedAction,
@@ -361,42 +387,48 @@ def _fallback_narrative(
     primary = signals[0]
     sources = sorted({signal.source_type for signal in signals})
     only_own_repos = sources == ["github"]
-    # Github summaries are written in Spanish second-person at the source
-    # (github_insight_service). External sources (arXiv, HN) carry the raw
-    # English abstract — never inline that as why_it_matters or you leak
-    # English into a Spanish operator message. Keep the Spanish template.
-    # GitHub summaries are in Spanish (written at source). External sources
-    # carry English abstracts — never inline them as prose. For GitHub we use
-    # the first sentence of the summary; for external we cite the title in
-    # quotes within a Spanish sentence so each signal gets a unique note.
+
+    # GitHub summaries are written in Spanish 2nd-person at the source
+    # (github_insight_service) — use them as-is.
+    # External sources (arXiv, Exa) carry English text.  We show a clipped
+    # excerpt so Carlos sees what the signal actually says, then append a
+    # keyword-detected Spanish connection to his positioning.
     summary_excerpt = (
         _first_sentence(primary.summary or "", max_chars=260)
         if primary.source_type == "github"
         else ""
     )
-    # Title clip for external signals — kept short so it fits inline.
+    # For external signals: first sentence of the abstract/highlight (≤180 chars).
+    external_excerpt = (
+        ""
+        if primary.source_type == "github"
+        else _first_sentence(primary.summary or "", max_chars=180)
+    )
+    # Title clip — fallback when no summary is available.
     title_clip = (
         ""
         if primary.source_type == "github"
         else _first_sentence(primary.title or "", max_chars=80)
     )
 
-    if action == RecommendedAction.MVP:
+    def _external_why(tail: str) -> str:
+        """Build a per-signal why_it_matters for non-github signals."""
+        corpus = _signal_corpus(primary)
+        connection = _external_relevance_connection(corpus)
+        if external_excerpt:
+            return f'"{external_excerpt}" — {connection}: {tail}'
         if title_clip:
-            why = (
-                f'"{title_clip}" converge con señales propias: vale la pena '
-                "armar un build mínimo y acotado a una semana sobre este ángulo."
+            return f'"{title_clip}" — {connection}: {tail}'
+        return f"{connection.capitalize()}: {tail}"
+
+    if action == RecommendedAction.MVP:
+        why = (
+            summary_excerpt
+            or _external_why(
+                "vale la pena armar un build mínimo y acotado a una semana "
+                "sobre este ángulo"
             )
-        else:
-            why = (
-                summary_excerpt
-                or (
-                    "Las señales convergen lo suficiente como para que valga la pena "
-                    "que armes un build pequeño y muy acotado a partir de aquí. "
-                    "Te ayuda a sostener tu línea de agentic workflows aplicados con "
-                    "código auditable, no solo con comentario."
-                )
-            )
+        )
         angle = (
             "Construir un MVP mínimo, scopeado a una semana, sobre el ángulo "
             "técnico que sostiene esta señal."
@@ -414,17 +446,9 @@ def _fallback_narrative(
             "criterio técnico y ejecución aplicada, alineado con tu marca."
         )
     elif action == RecommendedAction.NOTE:
-        if title_clip:
-            why = (
-                f'"{title_clip}" — lección técnica o método concreto que vale '
-                "la pena dejar escrito antes de que se diluya."
-            )
-        else:
-            why = summary_excerpt or (
-                "Te sirve como una nota técnica acotada: hay un método o una "
-                "lección concreta que vale la pena dejar escrita, sin forzar un "
-                "build todavía."
-            )
+        why = summary_excerpt or _external_why(
+            "vale la pena dejarlo escrito antes de que se diluya"
+        )
         if only_own_repos:
             angle = (
                 "Una nota técnica corta sobre lo que tu propio repo ya "
@@ -449,16 +473,9 @@ def _fallback_narrative(
             "señales dispersas en trabajo escrito coherente."
         )
     elif action == RecommendedAction.POST:
-        if title_clip:
-            why = (
-                f'"{title_clip}" — ángulo claro para un post breve con '
-                "observación técnica útil, sin comprometerte a un build."
-            )
-        else:
-            why = summary_excerpt or (
-                "Hay un ángulo claro para un post breve donde puedes apuntar "
-                "una observación técnica útil, sin comprometerte a un build."
-            )
+        why = summary_excerpt or _external_why(
+            "hay un ángulo claro para un post breve con claim acotado"
+        )
         if only_own_repos:
             angle = (
                 "Un post breve donde muestres lo que ya está en tu repo y "
@@ -483,9 +500,9 @@ def _fallback_narrative(
             "en un build o nota más grande."
         )
     else:  # ARCHIVE
-        why = summary_excerpt or (
-            "Por ahora la base no da. Mejor archivar y esperar evidencia "
-            "más fuerte antes de empujar esta línea."
+        why = summary_excerpt or _external_why(
+            "la base no alcanza todavía — mejor archivar y esperar "
+            "evidencia más fuerte"
         )
         angle = (
             "Archivar la señal con una nota corta que explique por qué no es "

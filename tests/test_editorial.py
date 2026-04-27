@@ -772,18 +772,19 @@ async def test_discard_editorial_plan_route_returns_409_on_invalid_transition(
 # ---------------------------------------------------------------------------
 
 
-async def test_fallback_why_is_title_anchored_for_arxiv_signal(
+async def test_fallback_why_includes_summary_and_differs_per_signal(
     db: aiosqlite.Connection,
 ) -> None:
-    """External signals (arXiv, Exa) must produce a unique title-anchored
-    'why_it_matters' in the fallback — not the same generic string for every signal."""
+    """External signals (arXiv, Exa) must produce unique why_it_matters notes
+    in the fallback that include the signal's own summary content — not the
+    same generic string for every signal."""
     arxiv_id = await _insert_signal(
         db,
         _signal(
             source_type="arxiv",
-            source_id="arxiv-titletest-1",
+            source_id="arxiv-summarytest-1",
             title="AgroAskAI: A Multi-Agentic AI Framework for Smallholder Farmers",
-            summary="This paper presents an AI system for agricultural queries.",
+            summary="This paper presents an agentic AI system for agricultural queries.",
             relevance_score=0.60,
         ),
     )
@@ -791,9 +792,12 @@ async def test_fallback_why_is_title_anchored_for_arxiv_signal(
         db,
         _signal(
             source_type="exa",
-            source_id="exa-titletest-1",
+            source_id="exa-summarytest-1",
             title="Representational Harms in LLM-Generated Narratives",
-            summary="Study of bias in large language model outputs.",
+            summary=(
+                "Researchers studied representational bias in climate-risk narratives "
+                "produced by large models across Global Majority nationalities."
+            ),
             relevance_score=0.55,
         ),
     )
@@ -805,8 +809,12 @@ async def test_fallback_why_is_title_anchored_for_arxiv_signal(
         plan_arxiv = await plan_editorial(db, [arxiv_id])
         plan_exa = await plan_editorial(db, [exa_id])
 
-    # Each note must include the signal's own title (not a shared generic phrase).
-    assert "AgroAskAI" in plan_arxiv.why_it_matters
-    assert "Representational Harms" in plan_exa.why_it_matters
+    # Each note must quote the signal's own summary excerpt (not just generic text).
+    assert "agentic AI system for agricultural queries" in plan_arxiv.why_it_matters
+    assert "representational bias" in plan_exa.why_it_matters.lower()
     # The two notes must differ from each other.
     assert plan_arxiv.why_it_matters != plan_exa.why_it_matters
+    # Neither note should contain the old generic fallback phrase verbatim.
+    generic = "hay un método o una lección concreta que vale la pena dejar escrita"
+    assert generic not in plan_arxiv.why_it_matters
+    assert generic not in plan_exa.why_it_matters
