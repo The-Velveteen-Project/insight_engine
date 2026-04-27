@@ -765,3 +765,48 @@ async def test_discard_editorial_plan_route_returns_409_on_invalid_transition(
         response = await client.post("/api/v1/editorial/plans/15/discard")
 
     assert response.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Fallback narrative — per-signal title anchoring for external sources
+# ---------------------------------------------------------------------------
+
+
+async def test_fallback_why_is_title_anchored_for_arxiv_signal(
+    db: aiosqlite.Connection,
+) -> None:
+    """External signals (arXiv, Exa) must produce a unique title-anchored
+    'why_it_matters' in the fallback — not the same generic string for every signal."""
+    arxiv_id = await _insert_signal(
+        db,
+        _signal(
+            source_type="arxiv",
+            source_id="arxiv-titletest-1",
+            title="AgroAskAI: A Multi-Agentic AI Framework for Smallholder Farmers",
+            summary="This paper presents an AI system for agricultural queries.",
+            relevance_score=0.60,
+        ),
+    )
+    exa_id = await _insert_signal(
+        db,
+        _signal(
+            source_type="exa",
+            source_id="exa-titletest-1",
+            title="Representational Harms in LLM-Generated Narratives",
+            summary="Study of bias in large language model outputs.",
+            relevance_score=0.55,
+        ),
+    )
+
+    with patch(
+        "app.services.editorial_planner.get_editorial_generator",
+        return_value=None,
+    ):
+        plan_arxiv = await plan_editorial(db, [arxiv_id])
+        plan_exa = await plan_editorial(db, [exa_id])
+
+    # Each note must include the signal's own title (not a shared generic phrase).
+    assert "AgroAskAI" in plan_arxiv.why_it_matters
+    assert "Representational Harms" in plan_exa.why_it_matters
+    # The two notes must differ from each other.
+    assert plan_arxiv.why_it_matters != plan_exa.why_it_matters

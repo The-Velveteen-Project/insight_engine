@@ -365,19 +365,38 @@ def _fallback_narrative(
     # (github_insight_service). External sources (arXiv, HN) carry the raw
     # English abstract — never inline that as why_it_matters or you leak
     # English into a Spanish operator message. Keep the Spanish template.
+    # GitHub summaries are in Spanish (written at source). External sources
+    # carry English abstracts — never inline them as prose. For GitHub we use
+    # the first sentence of the summary; for external we cite the title in
+    # quotes within a Spanish sentence so each signal gets a unique note.
     summary_excerpt = (
         _first_sentence(primary.summary or "", max_chars=260)
         if primary.source_type == "github"
         else ""
     )
+    # Title clip for external signals — kept short so it fits inline.
+    title_clip = (
+        ""
+        if primary.source_type == "github"
+        else _first_sentence(primary.title or "", max_chars=80)
+    )
 
     if action == RecommendedAction.MVP:
-        why = (
-            "Las señales convergen lo suficiente como para que valga la pena "
-            "que armes un build pequeño y muy acotado a partir de aquí. "
-            "Te ayuda a sostener tu línea de agentic workflows aplicados con "
-            "código auditable, no solo con comentario."
-        )
+        if title_clip:
+            why = (
+                f'"{title_clip}" converge con señales propias: vale la pena '
+                "armar un build mínimo y acotado a una semana sobre este ángulo."
+            )
+        else:
+            why = (
+                summary_excerpt
+                or (
+                    "Las señales convergen lo suficiente como para que valga la pena "
+                    "que armes un build pequeño y muy acotado a partir de aquí. "
+                    "Te ayuda a sostener tu línea de agentic workflows aplicados con "
+                    "código auditable, no solo con comentario."
+                )
+            )
         angle = (
             "Construir un MVP mínimo, scopeado a una semana, sobre el ángulo "
             "técnico que sostiene esta señal."
@@ -395,11 +414,17 @@ def _fallback_narrative(
             "criterio técnico y ejecución aplicada, alineado con tu marca."
         )
     elif action == RecommendedAction.NOTE:
-        why = summary_excerpt or (
-            "Te sirve como una nota técnica acotada: hay un método o una "
-            "lección concreta que vale la pena dejar escrita, sin forzar un "
-            "build todavía."
-        )
+        if title_clip:
+            why = (
+                f'"{title_clip}" — lección técnica o método concreto que vale '
+                "la pena dejar escrito antes de que se diluya."
+            )
+        else:
+            why = summary_excerpt or (
+                "Te sirve como una nota técnica acotada: hay un método o una "
+                "lección concreta que vale la pena dejar escrita, sin forzar un "
+                "build todavía."
+            )
         if only_own_repos:
             angle = (
                 "Una nota técnica corta sobre lo que tu propio repo ya "
@@ -424,10 +449,16 @@ def _fallback_narrative(
             "señales dispersas en trabajo escrito coherente."
         )
     elif action == RecommendedAction.POST:
-        why = summary_excerpt or (
-            "Hay un ángulo claro para un post breve donde puedes apuntar "
-            "una observación técnica útil, sin comprometerte a un build."
-        )
+        if title_clip:
+            why = (
+                f'"{title_clip}" — ángulo claro para un post breve con '
+                "observación técnica útil, sin comprometerte a un build."
+            )
+        else:
+            why = summary_excerpt or (
+                "Hay un ángulo claro para un post breve donde puedes apuntar "
+                "una observación técnica útil, sin comprometerte a un build."
+            )
         if only_own_repos:
             angle = (
                 "Un post breve donde muestres lo que ya está en tu repo y "
