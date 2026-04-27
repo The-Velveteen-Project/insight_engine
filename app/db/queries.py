@@ -521,11 +521,19 @@ async def insert_handoff_followup(
 async def get_due_handoff_followups(
     db: aiosqlite.Connection,
 ) -> list[aiosqlite.Row]:
-    """Pending followups whose due_at has passed. Caller iterates and notifies."""
+    """Pending followups whose due_at has passed. Caller iterates and notifies.
+
+    Uses ``datetime()`` on both sides so the comparison normalizes string
+    formats — ISO 8601 with offset (``2026-04-27T01:00:00+00:00``) and
+    SQLite's ``CURRENT_TIMESTAMP`` shape (``2026-04-27 01:00:00``) compare
+    correctly. A pure text ``<=`` would silently never match because the
+    ``T`` separator sorts after the space.
+    """
     cursor = await db.execute(
         """
         SELECT * FROM pending_handoff_followups
-        WHERE status = 'pending' AND due_at <= CURRENT_TIMESTAMP
+        WHERE status = 'pending'
+          AND datetime(due_at) <= datetime('now')
         ORDER BY due_at ASC
         """,
     )

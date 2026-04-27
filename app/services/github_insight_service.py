@@ -305,8 +305,10 @@ def _overview_candidate(
         evidence.append(f"readme={_limit_text(readme.text, 100)}")
 
     summary = (
-        f"{metadata.full_name} shows a reusable repo signal via its public framing, "
-        f"root structure, and documentation surface."
+        f"Tu repo {metadata.full_name} muestra una superficie de portafolio "
+        "reutilizable: framing público, estructura de raíz y documentación "
+        "visible. Te sirve como pieza de credibilidad técnica antes que como "
+        "evidencia de impacto."
     )
     raw = json.dumps(
         {
@@ -339,8 +341,9 @@ def _activity_candidate(
     subjects = [_commit_subject(commit) for commit in commits[:4]]
     latest_commit_at = commits[0].committed_at
     summary = (
-        f"{metadata.full_name} shows recent repo activity. This is weak evidence only: "
-        f"it reflects commit subjects and cadence, not a claim about shipped impact."
+        f"Tu repo {metadata.full_name} muestra actividad reciente; lee como "
+        "señal débil de cadencia, no como evidencia de impacto. Te sirve "
+        "para verificar que la línea de trabajo sigue viva."
     )
     raw = json.dumps(
         {
@@ -379,8 +382,10 @@ def _artifact_candidates(
                 title=f"{metadata.full_name}: testing surface",
                 url=metadata.html_url,
                 summary=(
-                    "The repo exposes a `tests/` root directory, which is a "
-                    "concrete portfolio signal of engineering discipline."
+                    f"Tu repo {metadata.full_name} expone un directorio "
+                    "`tests/` en la raíz. Te sirve como señal concreta de "
+                    "disciplina de ingeniería: separa proyecto demo de código "
+                    "que un cliente puede auditar."
                 ),
                 evidence=["root_dir=tests"],
                 raw_content=_limit_text(raw, _RAW_CONTENT_LIMIT),
@@ -397,9 +402,10 @@ def _artifact_candidates(
             evidence.append("content=truncated")
 
         summary = (
-            f"{metadata.full_name} exposes a key build artifact in `{path}`. "
-            "This is a portfolio signal about stack or delivery shape, "
-            "not a claim about product quality."
+            f"Tu repo {metadata.full_name} expone un artefacto de build en "
+            f"`{path}`. Te sirve como señal de stack y forma de entrega "
+            "visible sin abrir el código; no afirma nada sobre la calidad "
+            "del producto."
         )
         raw = json.dumps(
             {

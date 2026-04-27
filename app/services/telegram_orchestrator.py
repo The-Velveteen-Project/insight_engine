@@ -869,10 +869,15 @@ async def _plan_for_signal_ids(
     db: aiosqlite.Connection,
     signal_ids: list[int],
 ) -> EditorialPlan:
+    # Use the LLM-backed planner whenever an OpenAI key is configured so the
+    # weekly's "Mi lectura" gets a real editorial reading instead of the
+    # generic deterministic angle. Falls back automatically when the key is
+    # absent or the call fails.
+    use_llm = bool(settings.openai_api_key.strip())
     return await editorial_planner.plan_editorial(
         db,
         signal_ids,
-        use_generation=False,
+        use_generation=use_llm,
     )
 
 
@@ -1062,39 +1067,55 @@ def _deterministic_weekly_thesis(
     has_external = bool({"arxiv", "hackernews"} & sources)
     is_mvp = plan.recommended_action == RecommendedAction.MVP
 
+    own_repo_names = sorted(
+        {
+            signal.title.split(":")[0].strip()
+            for signal in signal_contexts
+            if signal.source_type == "github" and signal.title
+        }
+    )
+    external_titles = [
+        signal.title for signal in signal_contexts if signal.source_type != "github"
+    ]
+
     if has_own_repo and has_external:
+        external_hint = external_titles[0] if external_titles else "una pieza externa"
+        repos_hint = ", ".join(own_repo_names) if own_repo_names else "tus repos"
         opener = (
-            "Esta semana tu trabajo propio y el material externo se cruzan en "
-            f"el mismo eje ({focus}). Hay base para tratarlos como un solo "
-            "movimiento editorial, no como tres signals sueltos."
+            f"Esta semana hay convergencia real: lo que mueves en {repos_hint} "
+            f"se cruza con material externo (\"{external_hint}\") sobre {focus}. "
+            "Vale la pena tratarlos como un solo movimiento editorial, no como "
+            "tres signals sueltas."
         )
         strong = True
     elif has_external and not has_own_repo:
+        ext_count = len(external_titles)
         opener = (
-            "Esta semana las señales fuertes vienen del material externo: "
-            f"vale la pena leerlas con foco en {focus} y decidir si conectan "
-            "con alguna línea propia que ya estés moviendo."
+            f"Esta semana las señales fuertes vienen de afuera ({ext_count} "
+            f"piezas alrededor de {focus}). No veo todavía actividad propia que "
+            "las ancle, así que conviene leerlas antes de comprometerte a build."
         )
         strong = True
     elif has_own_repo and not has_external:
+        repos_hint = ", ".join(own_repo_names) if own_repo_names else "tu repo"
         opener = (
-            "Esta semana la actividad propia carga el brief, sin material "
-            "externo defendible. Es un buen momento para apuntalar tu repo "
-            "antes de buscar tracción afuera."
+            f"Esta semana el brief lo carga tu trabajo propio ({repos_hint}); "
+            "no hay material externo defendible que lo acompañe. Es buen "
+            "momento para apuntalar la estructura antes de buscar tracción "
+            "afuera, o para sumar lectura externa sobre el mismo eje."
         )
         strong = False
     else:
         opener = (
             "Esta semana las señales son útiles pero sueltas: no veo una "
-            "tesis fuerte que las una más allá del foco general."
+            f"tesis fuerte que las una más allá del foco general ({focus})."
         )
         strong = False
 
     if active_goal:
         opener += (
-            f" Para tu objetivo activo ({active_goal}), conviene revisarlas "
-            "con la pregunta de si te acercan en este horizonte o son ruido "
-            "interesante."
+            f" Para tu objetivo activo ({active_goal}), revísalas con la "
+            "pregunta de si te acercan al deadline o son ruido interesante."
         )
 
     handoff_reason: str | None = None

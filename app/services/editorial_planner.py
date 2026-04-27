@@ -360,6 +360,8 @@ def _fallback_narrative(
 ) -> GeneratedEditorialDraft:
     primary = signals[0]
     summary_excerpt = _first_sentence(primary.summary or "", max_chars=260)
+    sources = sorted({signal.source_type for signal in signals})
+    only_own_repos = sources == ["github"]
 
     if action == RecommendedAction.MVP:
         why = (
@@ -390,10 +392,17 @@ def _fallback_narrative(
             "lección concreta que vale la pena dejar escrita, sin forzar un "
             "build todavía."
         )
-        angle = (
-            "Una nota técnica sobria que explique la lección y su implicación "
-            "para tu trabajo, sin estirarla en post o build."
-        )
+        if only_own_repos:
+            angle = (
+                "Una nota técnica corta sobre lo que tu propio repo ya "
+                "demuestra, escrita para un lector que evalúa rigor de "
+                "ingeniería antes que producto terminado."
+            )
+        else:
+            angle = (
+                "Una nota técnica sobria que explique la lección concreta y "
+                "su implicación para tu trabajo, sin estirarla a post o build."
+            )
         outline = DraftOutline(
             hook="Abrir con la señal y el problema concreto al que apunta.",
             points=[
@@ -411,10 +420,17 @@ def _fallback_narrative(
             "Hay un ángulo claro para un post breve donde puedes apuntar "
             "una observación técnica útil, sin comprometerte a un build."
         )
-        angle = (
-            "Un insight público breve, con una interpretación técnica honesta "
-            "anclada en la evidencia disponible."
-        )
+        if only_own_repos:
+            angle = (
+                "Un post breve donde muestres lo que ya está en tu repo y "
+                "qué problema concreto resuelve, sin estirarlo a build ni "
+                "claim de producto."
+            )
+        else:
+            angle = (
+                "Un post breve con una interpretación técnica anclada en las "
+                "señales reales de la semana — claim acotado, no panorama."
+            )
         outline = DraftOutline(
             hook="Abrir con la señal concreta que vale la pena notar.",
             points=[

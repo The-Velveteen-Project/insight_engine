@@ -209,6 +209,26 @@ async def test_get_due_handoff_followups_only_returns_overdue(
     assert (chat_id, 702) not in pairs
 
 
+async def test_isoformat_due_at_compares_correctly_against_current_timestamp(
+    db: aiosqlite.Connection,
+) -> None:
+    """Regression: ISO 8601 with offset must compare correctly against
+    SQLite's CURRENT_TIMESTAMP. A naive text `<=` silently never matches
+    because the `T` separator sorts after the space.
+    """
+    chat_id = 910099
+    past_iso = (datetime.now(tz=UTC) - timedelta(hours=2)).isoformat()
+    followup_id = await insert_handoff_followup(
+        db,
+        plan_id=9001,
+        chat_id=chat_id,
+        due_at=past_iso,
+    )
+    due = await get_due_handoff_followups(db)
+    ids = {int(row["id"]) for row in due}
+    assert followup_id in ids
+
+
 # --- handoff follow-ups: process_due_followups end-to-end ------------------
 
 
