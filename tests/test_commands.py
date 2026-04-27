@@ -1622,8 +1622,14 @@ async def test_handle_command_linkedin_renders_paste_ready_post(
     post = LinkedInPost(
         hook="Esta semana revisé qué hace defendible un repo aplicado.",
         body_paragraphs=[
-            "El primer paso fue distinguir señales de criterio de señales de actividad.",
-            "Lo que pesa de verdad es la disciplina: tests visibles, artefactos de build.",
+            (
+                "El primer paso fue distinguir señales de criterio "
+                "de señales de actividad."
+            ),
+            (
+                "Lo que pesa de verdad es la disciplina: tests visibles, "
+                "artefactos de build."
+            ),
         ],
         closing="¿Qué señal usarías tú para evaluar un repo aplicado?",
         hashtags=["AppliedAI", "AgenticWorkflows"],
