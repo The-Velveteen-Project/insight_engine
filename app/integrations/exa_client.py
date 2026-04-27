@@ -12,7 +12,7 @@ Behavior:
 - Empty EXA_API_KEY raises RuntimeError so the orchestrator's _safe_fetch
   surfaces it as a failed source with a clear note ("EXA_API_KEY no
   configurada"), rather than silently returning zero candidates.
-- We request `highlights` (3-sentence excerpts) and use them as summary;
+- We request `highlights` (up to 4 000 chars) and use them as summary;
   we do NOT request `text` (full body) — that would 10× the response size
   for marginal gain. If we ever want full body extraction, that's the
   Firecrawl-shaped problem deferred to Sub-phase D.
@@ -131,11 +131,9 @@ async def fetch(query: str, *, max_results: int = 10) -> list[SignalCandidate]:
                 "query": query,
                 "type": "neural",
                 "numResults": max_results,
-                "useAutoprompt": True,
                 "contents": {
                     "highlights": {
-                        "numSentences": 3,
-                        "highlightsPerUrl": 1,
+                        "max_characters": 4000,
                     },
                 },
             },

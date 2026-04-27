@@ -123,7 +123,9 @@ def test_repo_source_id_convention_is_stable() -> None:
 
 
 def test_decode_base64_text_truncates_safely() -> None:
-    encoded = "YQ==" * 8000
+    import base64 as _b64
+
+    encoded = _b64.b64encode(b"a" * 8000).decode()
     text, truncated = _decode_base64_text(encoded, max_bytes=10)
     assert truncated is True
     assert "[truncated]" in text
