@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlsplit, urlunsplit
 
@@ -42,11 +42,27 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class DiscoverySourceOutcome:
+    """Per-source diagnostics for a single discover() call.
+
+    Surfaced in the weekly footer so the operator can be honest about what
+    it tried. `failed=True` means the source raised — the weekly should say
+    that instead of pretending nothing was relevant.
+    """
+
+    source_name: str
+    fetched: int
+    failed: bool = False
+    error_summary: str | None = None
+
+
+@dataclass
 class DiscoveryResult:
     """Return type of discover(). Carries ranked signals + the query sent to APIs."""
 
     signals: list[SignalCandidate]
     normalized_query: str  # may differ from the caller's original query
+    outcomes: list[DiscoverySourceOutcome] = field(default_factory=list)
 
 
 class DiscoveryFetcher(Protocol):
@@ -96,13 +112,28 @@ def get_sources_by_name(names: Sequence[str]) -> tuple[DiscoverySource, ...]:
 async def _safe_fetch(
     source_name: str,
     operation: Awaitable[list[SignalCandidate]],
-) -> list[SignalCandidate]:
-    """Awaits a provider fetch, returning [] if the provider fails."""
+) -> tuple[list[SignalCandidate], DiscoverySourceOutcome]:
+    """Awaits a provider fetch, returning ([], outcome.failed=True) on error.
+
+    Returns the outcome alongside the candidates so the caller can render
+    honest per-source diagnostics in the weekly footer. A swallowed silent
+    failure is the worst outcome — the user should always know when a
+    source failed vs. returned nothing.
+    """
     try:
-        return await operation
+        candidates = await operation
+        return candidates, DiscoverySourceOutcome(
+            source_name=source_name,
+            fetched=len(candidates),
+        )
     except Exception as exc:
         logger.warning("Discovery source %r failed: %s", source_name, exc)
-        return []
+        return [], DiscoverySourceOutcome(
+            source_name=source_name,
+            fetched=0,
+            failed=True,
+            error_summary=str(exc)[:200] or exc.__class__.__name__,
+        )
 
 
 def _normalize_url(raw_url: str) -> str:
@@ -163,13 +194,13 @@ async def discover(
     resolved_sources = tuple(sources) if sources is not None else get_enabled_sources()
     if not resolved_sources:
         logger.warning("Discovery skipped: no enabled sources.")
-        return DiscoveryResult(signals=[], normalized_query=query)
+        return DiscoveryResult(signals=[], normalized_query=query, outcomes=[])
 
     # Normalize query to English before hitting English-first APIs.
     normalized = await normalize_query(query)
 
     per_source = max(resolved_limit * settings.discovery_fetch_multiplier, 10)
-    source_results = await asyncio.gather(
+    fetch_results = await asyncio.gather(
         *[
             _safe_fetch(
                 source.name,
@@ -178,6 +209,8 @@ async def discover(
             for source in resolved_sources
         ]
     )
+    source_results = [pair[0] for pair in fetch_results]
+    outcomes = [pair[1] for pair in fetch_results]
 
     merged = _dedup([candidate for results in source_results for candidate in results])
     # Score against the normalized query so that gate logic has English tokens
@@ -211,4 +244,8 @@ async def discover(
         len(merged),
         len(top),
     )
-    return DiscoveryResult(signals=top, normalized_query=normalized)
+    return DiscoveryResult(
+        signals=top,
+        normalized_query=normalized,
+        outcomes=outcomes,
+    )

@@ -32,6 +32,7 @@ from app.schemas.commands import (
     MvpIdeaSuggestion,
     ParsedTelegramCommand,
     SignalSuggestion,
+    WeeklySourceStats,
     WeeklySummary,
 )
 from app.schemas.discovery import SignalCandidate
@@ -945,6 +946,28 @@ async def _discover_refs(
     return [_candidate_ref(c) for c in result.signals], result.normalized_query
 
 
+async def _discover_with_outcomes(
+    db: aiosqlite.Connection,
+    query: str,
+    *,
+    message_id: int | None = None,
+) -> tuple[
+    list[_CandidateRef],
+    str,
+    list[discovery_service.DiscoverySourceOutcome],
+]:
+    """Discover variant that also exposes per-source outcomes for the weekly."""
+    result = await discovery_service.discover(
+        query,
+        db,
+        limit=settings.telegram_command_limit,
+        message_id=message_id,
+        sources=None,
+    )
+    refs = [_candidate_ref(c) for c in result.signals]
+    return refs, result.normalized_query, result.outcomes
+
+
 async def _github_refs(
     db: aiosqlite.Connection,
     *,
@@ -960,6 +983,41 @@ async def _github_refs(
         message_id=message_id,
     )
     return [_candidate_ref(candidate) for candidate in candidates]
+
+
+async def _github_refs_with_outcome(
+    db: aiosqlite.Connection,
+    *,
+    message_id: int | None = None,
+) -> tuple[list[_CandidateRef], discovery_service.DiscoverySourceOutcome | None]:
+    """github_refs variant that also returns a single 'github' outcome row.
+
+    Per-repo failures are still logged inside github_insight_service; this
+    surfaces only the aggregate count for the weekly footer.
+    """
+    repos = settings.priority_github_repo_list
+    if not repos:
+        return [], None
+    try:
+        candidates = await github_insight_service.suggest_repo_insights(
+            repos,
+            db,
+            limit=settings.telegram_command_limit,
+            message_id=message_id,
+        )
+    except Exception as exc:  # belt-and-suspenders
+        logger.warning("github_insight_service raised at weekly time: %s", exc)
+        return [], discovery_service.DiscoverySourceOutcome(
+            source_name="github",
+            fetched=0,
+            failed=True,
+            error_summary=str(exc)[:200] or exc.__class__.__name__,
+        )
+    refs = [_candidate_ref(candidate) for candidate in candidates]
+    return refs, discovery_service.DiscoverySourceOutcome(
+        source_name="github",
+        fetched=len(candidates),
+    )
 
 
 def _dedup_signal_ids(signal_ids: list[int]) -> list[int]:
@@ -1180,6 +1238,96 @@ async def _resolve_weekly_thesis(
     )
 
 
+def _balanced_weekly_selection(
+    external: list[_CandidateRef],
+    github_refs: list[_CandidateRef],
+    *,
+    target: int = 3,
+) -> list[_CandidateRef]:
+    """Pick `target` candidates ensuring source diversity when possible.
+
+    Rule: if both external and github have anything to offer, the brief
+    reserves at least one slot for the top external and one slot for the
+    top github (regardless of pure score). Remaining slots are filled by
+    overall score across what's left. This stops github from drowning out
+    external work just because his own repos accumulate artifact bonuses.
+    """
+    sorted_external = sorted(
+        external, key=lambda c: c.relevance_score, reverse=True
+    )
+    sorted_github = sorted(
+        github_refs, key=lambda c: c.relevance_score, reverse=True
+    )
+    selected: list[_CandidateRef] = []
+    if sorted_external:
+        selected.append(sorted_external[0])
+    if sorted_github:
+        selected.append(sorted_github[0])
+    # Now fill the remaining slots from whichever pool has more, top-by-score.
+    chosen_ids = {(c.source_type, c.source_id) for c in selected}
+    remainder = [
+        c
+        for c in (*sorted_external, *sorted_github)
+        if (c.source_type, c.source_id) not in chosen_ids
+    ]
+    remainder.sort(key=lambda c: c.relevance_score, reverse=True)
+    selected.extend(remainder[: max(0, target - len(selected))])
+    # Final ordering = score descending, so the top-scoring item leads the brief.
+    return sorted(selected, key=lambda c: c.relevance_score, reverse=True)[:target]
+
+
+def _build_weekly_source_stats(
+    selected: list[_CandidateRef],
+    discovery_outcomes: list[discovery_service.DiscoverySourceOutcome],
+    github_outcome: discovery_service.DiscoverySourceOutcome | None,
+) -> list[WeeklySourceStats]:
+    """One row per source actually attempted, with how many made the brief."""
+    in_brief_by_source: dict[str, int] = {}
+    for candidate in selected:
+        in_brief_by_source[candidate.source_type] = (
+            in_brief_by_source.get(candidate.source_type, 0) + 1
+        )
+    stats: list[WeeklySourceStats] = []
+    for outcome in discovery_outcomes:
+        in_brief = in_brief_by_source.get(outcome.source_name, 0)
+        note: str | None = None
+        if outcome.failed:
+            note = (
+                f"falla en la fuente: {outcome.error_summary or 'sin detalle'}"
+            )
+        elif outcome.fetched > 0 and in_brief == 0:
+            note = "ninguno superó la barra editorial"
+        label = _DISCOVERY_LABELS.get(outcome.source_name, outcome.source_name)
+        stats.append(
+            WeeklySourceStats(
+                source_label=label,
+                candidates_returned=outcome.fetched,
+                candidates_in_brief=in_brief,
+                failed=outcome.failed,
+                note=note,
+            )
+        )
+    if github_outcome is not None:
+        in_brief = in_brief_by_source.get("github", 0)
+        note = None
+        if github_outcome.failed:
+            note = (
+                f"falla en la fuente: {github_outcome.error_summary or 'sin detalle'}"
+            )
+        elif github_outcome.fetched > 0 and in_brief == 0:
+            note = "ninguno superó la barra editorial"
+        stats.append(
+            WeeklySourceStats(
+                source_label=_DISCOVERY_LABELS["github"],
+                candidates_returned=github_outcome.fetched,
+                candidates_in_brief=in_brief,
+                failed=github_outcome.failed,
+                note=note,
+            )
+        )
+    return stats
+
+
 async def build_weekly_summary(
     db: aiosqlite.Connection,
     *,
@@ -1187,32 +1335,39 @@ async def build_weekly_summary(
     message_id: int | None = None,
 ) -> WeeklySummary | None:
     resolved_query = query or settings.weekly_discovery_query
-    external, _ = await _discover_refs(db, resolved_query, message_id=message_id)
-    github_refs = await _github_refs(db, message_id=message_id)
-    combined = sorted(
-        external + github_refs,
-        key=lambda item: item.relevance_score,
-        reverse=True,
+    external, _, discovery_outcomes = await _discover_with_outcomes(
+        db, resolved_query, message_id=message_id
     )
-    signals_evaluated = len(combined)
-    if not combined:
+    github_refs, github_outcome = await _github_refs_with_outcome(
+        db, message_id=message_id
+    )
+    selected = _balanced_weekly_selection(external, github_refs, target=3)
+    signals_evaluated = len(external) + len(github_refs)
+    if not selected:
         return None
 
-    signal_ids = await _top_signal_ids(db, combined, limit=3)
+    signal_ids = await _top_signal_ids(db, selected, limit=3)
     if not signal_ids:
         return None
 
-    suggestions = await _candidates_to_suggestions(db, combined[:3])
+    suggestions = await _candidates_to_suggestions(db, selected[:3])
     plan = await _plan_for_signal_ids(db, signal_ids)
     mvp_idea = await build_mvp_idea(
         db,
         resolved_query,
         message_id=message_id,
-        candidate_refs=combined,
+        candidate_refs=sorted(
+            external + github_refs,
+            key=lambda c: c.relevance_score,
+            reverse=True,
+        ),
     )
 
     signal_rows = await get_signals_by_ids(db, signal_ids)
     signal_contexts = [_row_to_signal_context(row) for row in signal_rows]
+    source_stats = _build_weekly_source_stats(
+        selected, discovery_outcomes, github_outcome
+    )
 
     focus_label = settings.weekly_focus_label.strip() or None
 
@@ -1255,6 +1410,7 @@ async def build_weekly_summary(
         focus_label=focus_label,
         active_goal=active_goal_text,
         llm_thesis_used=llm_used,
+        source_stats=source_stats,
     )
 
 

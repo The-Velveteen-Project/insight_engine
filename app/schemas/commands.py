@@ -48,6 +48,22 @@ class SignalSuggestion(BaseModel):
     url: str | None = None
 
 
+class WeeklySourceStats(BaseModel):
+    """Per-source discovery diagnostics surfaced in the weekly footer.
+
+    The weekly is trustworthy only if you can see what it tried. This is the
+    minimum honest report: how many candidates each source returned, how
+    many made the brief, and whether the source failed outright. The tracks
+    DLC (planned) reads from the same field.
+    """
+
+    source_label: str = Field(min_length=1, max_length=80)
+    candidates_returned: int = 0
+    candidates_in_brief: int = 0
+    failed: bool = False
+    note: str | None = Field(default=None, max_length=200)
+
+
 class WeeklySummary(BaseModel):
     query: str
     top_signals: list[SignalSuggestion] = Field(min_length=1, max_length=3)
@@ -62,6 +78,7 @@ class WeeklySummary(BaseModel):
     focus_label: str | None = None
     active_goal: str | None = None
     llm_thesis_used: bool = False
+    source_stats: list[WeeklySourceStats] = Field(default_factory=list)
 
 
 class MvpIdeaSuggestion(BaseModel):

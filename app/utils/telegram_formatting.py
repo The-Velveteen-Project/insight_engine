@@ -15,7 +15,12 @@ from collections import Counter
 from datetime import UTC, datetime
 from html import escape
 
-from app.schemas.commands import MvpIdeaSuggestion, SignalSuggestion, WeeklySummary
+from app.schemas.commands import (
+    MvpIdeaSuggestion,
+    SignalSuggestion,
+    WeeklySourceStats,
+    WeeklySummary,
+)
 from app.schemas.drafts import PersistedEditorialDraft
 from app.schemas.editorial import (
     EditorialPlanStatus,
@@ -390,6 +395,33 @@ def format_no_signals(heading: str, normalized_query: str = "") -> str:
     return "\n".join(lines)
 
 
+def _format_source_stats_footer(stats: list[WeeklySourceStats]) -> str:
+    """Render the honest discovery footer at the bottom of the weekly.
+
+    The shape is: one bold header line + one line per source with its
+    fetched/in-brief counts and an optional explanation when nothing made
+    the brief (or the source failed). Designed to be skimmable and to
+    answer the operator's question "what did you actually try?".
+    """
+    lines = ["<b>Discovery esta semana</b>"]
+    for stat in stats:
+        label = escape_text(stat.source_label)
+        if stat.failed:
+            lines.append(
+                f"• {label}: falló — "
+                f"{escape_text(stat.note or 'sin detalle')}"
+            )
+            continue
+        line = (
+            f"• {label}: {stat.candidates_returned} candidatos · "
+            f"{stat.candidates_in_brief} en el brief"
+        )
+        if stat.note:
+            line += f" — {escape_text(stat.note)}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
 def _weekly_default_thesis(summary: WeeklySummary) -> str:
     """Last-resort opener used only if no thesis was generated upstream."""
     if summary.mvp_action == RecommendedAction.MVP:
@@ -481,6 +513,9 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
                 ),
             ]
         )
+
+    if summary.source_stats:
+        lines.extend(["", _format_source_stats_footer(summary.source_stats)])
 
     lines.append("")
     first_id = next(

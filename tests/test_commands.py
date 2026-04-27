@@ -14,6 +14,7 @@ from app.schemas.commands import (
     CommandName,
     MvpIdeaSuggestion,
     SignalSuggestion,
+    WeeklySourceStats,
     WeeklySummary,
 )
 from app.schemas.discovery import SignalCandidate
@@ -1504,3 +1505,130 @@ async def test_handle_operator_text_natural_goal_query(
     assert response is not None
     assert "Goal activo" in response
     assert "goal de prueba" in response
+
+
+# --- Diversity + transparency in the weekly --------------------------------
+
+
+def _ref(source_type: str, source_id: str, title: str, score: float):
+    """Build a _CandidateRef via the orchestrator's private type."""
+    from app.services.telegram_orchestrator import _CandidateRef
+
+    return _CandidateRef(
+        source_type=source_type,
+        source_id=source_id,
+        title=title,
+        url=f"https://example.com/{source_id}",
+        summary="resumen",
+        relevance_score=score,
+        relevance_note="nota",
+    )
+
+
+def test_balanced_weekly_selection_picks_one_of_each_when_both_present() -> None:
+    from app.services.telegram_orchestrator import _balanced_weekly_selection
+
+    external = [
+        _ref("arxiv", "2501.0001", "Paper externo bueno", 0.62),
+    ]
+    github_refs = [
+        _ref("github", "g1", "Tu repo top", 0.91),
+        _ref("github", "g2", "Tu repo dos", 0.88),
+        _ref("github", "g3", "Tu repo tres", 0.86),
+    ]
+    selected = _balanced_weekly_selection(external, github_refs, target=3)
+    source_types = [c.source_type for c in selected]
+    assert source_types.count("arxiv") >= 1
+    assert source_types.count("github") >= 1
+    assert len(selected) == 3
+
+
+def test_balanced_weekly_selection_falls_back_to_github_only_when_no_external() -> (
+    None
+):
+    from app.services.telegram_orchestrator import _balanced_weekly_selection
+
+    github_refs = [
+        _ref("github", "g1", "Tu repo top", 0.91),
+        _ref("github", "g2", "Tu repo dos", 0.88),
+    ]
+    selected = _balanced_weekly_selection([], github_refs, target=3)
+    assert all(c.source_type == "github" for c in selected)
+    assert len(selected) == 2
+
+
+def test_format_weekly_summary_renders_discovery_footer() -> None:
+    summary = WeeklySummary(
+        query="test",
+        top_signals=[
+            SignalSuggestion(
+                signal_id=1,
+                title="Solo signal",
+                why_it_matters="Te sirve por X.",
+                suggested_action=RecommendedAction.NOTE,
+                relevance_score=0.6,
+                source_label="GitHub REST",
+                url="https://example.com/x",
+            )
+        ],
+        editorial_action=RecommendedAction.NOTE,
+        editorial_angle="Ángulo simple.",
+        mvp_action=RecommendedAction.NOTE,
+        mvp_summary="Sin build.",
+        next_step="Nota.",
+        thesis_paragraph="Tesis simple.",
+        signals_evaluated=4,
+        source_stats=[
+            WeeklySourceStats(
+                source_label="arXiv API",
+                candidates_returned=4,
+                candidates_in_brief=0,
+                note="ninguno superó la barra editorial",
+            ),
+            WeeklySourceStats(
+                source_label="Hacker News Algolia",
+                candidates_returned=0,
+                candidates_in_brief=0,
+                failed=True,
+                note="falla en la fuente: timeout",
+            ),
+            WeeklySourceStats(
+                source_label="GitHub REST",
+                candidates_returned=3,
+                candidates_in_brief=1,
+            ),
+        ],
+    )
+
+    text = telegram_formatting.format_weekly_summary(summary)
+    assert "Discovery esta semana" in text
+    assert "arXiv API" in text
+    assert "ninguno superó la barra editorial" in text
+    assert "Hacker News Algolia" in text
+    assert "falló" in text
+    assert "GitHub REST" in text
+    assert "3 candidatos" in text
+    assert "1 en el brief" in text
+
+
+def test_format_weekly_summary_omits_footer_when_no_stats() -> None:
+    summary = WeeklySummary(
+        query="test",
+        top_signals=[
+            SignalSuggestion(
+                signal_id=1,
+                title="Solo signal",
+                why_it_matters="X.",
+                suggested_action=RecommendedAction.NOTE,
+                relevance_score=0.6,
+                source_label="GitHub REST",
+            )
+        ],
+        editorial_action=RecommendedAction.NOTE,
+        editorial_angle="Ángulo.",
+        mvp_action=RecommendedAction.NOTE,
+        mvp_summary="x",
+        next_step="x",
+    )
+    text = telegram_formatting.format_weekly_summary(summary)
+    assert "Discovery esta semana" not in text
