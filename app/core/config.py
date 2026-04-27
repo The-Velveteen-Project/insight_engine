@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     weekly_thesis_timeout_seconds: float = 12.0
     handoff_followup_delay_hours: int = 48
     handoff_match_timeout_seconds: float = 10.0
+    linkedin_writer_timeout_seconds: float = 14.0
 
     db_path: str = "data/engine.db"
     debug: bool = False

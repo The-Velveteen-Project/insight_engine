@@ -1611,6 +1611,149 @@ def test_format_weekly_summary_renders_discovery_footer() -> None:
     assert "1 en el brief" in text
 
 
+# --- LinkedIn shipping mode ------------------------------------------------
+
+
+async def test_handle_command_linkedin_renders_paste_ready_post(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.schemas.linkedin import LinkedInPost
+
+    post = LinkedInPost(
+        hook="Esta semana revisé qué hace defendible un repo aplicado.",
+        body_paragraphs=[
+            "El primer paso fue distinguir señales de criterio de señales de actividad.",
+            "Lo que pesa de verdad es la disciplina: tests visibles, artefactos de build.",
+        ],
+        closing="¿Qué señal usarías tú para evaluar un repo aplicado?",
+        hashtags=["AppliedAI", "AgenticWorkflows"],
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
+        new=AsyncMock(return_value=(post, True)),
+    ) as mock_build:
+        response = await handle_command("/linkedin 42", db)
+
+    mock_build.assert_awaited_once_with(db, 42)
+    assert "LinkedIn — plan #42" in response
+    assert "Esta semana revisé" in response
+    assert "AppliedAI" in response
+    assert "<pre>" in response
+    assert "Listo para copiar" in response
+    # Hashtags prefix preserved
+    assert "#AppliedAI" in response
+    assert "#AgenticWorkflows" in response
+
+
+async def test_handle_command_linkedin_marks_fallback_when_llm_unavailable(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.schemas.linkedin import LinkedInPost
+
+    post = LinkedInPost(
+        hook="Esta semana revisé el repo X.",
+        body_paragraphs=["Razonamiento.", "Detalle."],
+        closing="Cierre concreto.",
+        hashtags=[],
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
+        new=AsyncMock(return_value=(post, False)),
+    ):
+        response = await handle_command("/linkedin 42", db)
+
+    assert "fallback determinista" in response
+
+
+async def test_handle_command_linkedin_prompt_renders_kit(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.schemas.linkedin import LinkedInPromptKit
+
+    kit = LinkedInPromptKit(
+        plan_id=99,
+        system_prompt=(
+            "System prompt completo con suficientes caracteres para pasar el "
+            "validador del schema y describir el rol de escritor LinkedIn."
+        ),
+        user_prompt=(
+            "User prompt completo con bastante contexto del plan que sirve "
+            "para que cualquier LLM produzca el post sin más entrada."
+        ),
+        one_line_paste_command=(
+            "Eres mi asistente editorial. Pégalo y dame el post."
+        ),
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_prompt_kit",
+        new=AsyncMock(return_value=kit),
+    ):
+        response = await handle_command("/linkedin_prompt 99", db)
+
+    assert "Prompt kit de LinkedIn — plan #99" in response
+    assert "System prompt" in response
+    assert "User prompt" in response
+    assert "One-liner" in response
+    assert "<pre>" in response
+
+
+async def test_handle_operator_text_natural_linkedin_post(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.schemas.linkedin import LinkedInPost
+
+    post = LinkedInPost(
+        hook="Hook breve para natural language LinkedIn test.",
+        body_paragraphs=["Cuerpo uno.", "Cuerpo dos."],
+        closing="Cierre concreto y claro.",
+        hashtags=[],
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
+        new=AsyncMock(return_value=(post, True)),
+    ) as mock_build:
+        response = await handle_operator_text(
+            "armame el post de linkedin del plan 7",
+            db,
+            chat_id=901,
+        )
+
+    mock_build.assert_awaited_once_with(db, 7)
+    assert response is not None
+    assert "LinkedIn — plan #7" in response
+
+
+async def test_handle_operator_text_natural_linkedin_prompt(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.schemas.linkedin import LinkedInPromptKit
+
+    kit = LinkedInPromptKit(
+        plan_id=8,
+        system_prompt="x" * 100,
+        user_prompt="y" * 100,
+        one_line_paste_command="z" * 30,
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_prompt_kit",
+        new=AsyncMock(return_value=kit),
+    ) as mock_build:
+        response = await handle_operator_text(
+            "dame el prompt para linkedin del plan 8",
+            db,
+            chat_id=902,
+        )
+
+    mock_build.assert_awaited_once_with(db, 8)
+    assert response is not None
+    assert "plan #8" in response
+
+
 def test_format_weekly_summary_omits_footer_when_no_stats() -> None:
     summary = WeeklySummary(
         query="test",

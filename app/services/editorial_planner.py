@@ -359,9 +359,17 @@ def _fallback_narrative(
     action: RecommendedAction,
 ) -> GeneratedEditorialDraft:
     primary = signals[0]
-    summary_excerpt = _first_sentence(primary.summary or "", max_chars=260)
     sources = sorted({signal.source_type for signal in signals})
     only_own_repos = sources == ["github"]
+    # Github summaries are written in Spanish second-person at the source
+    # (github_insight_service). External sources (arXiv, HN) carry the raw
+    # English abstract — never inline that as why_it_matters or you leak
+    # English into a Spanish operator message. Keep the Spanish template.
+    summary_excerpt = (
+        _first_sentence(primary.summary or "", max_chars=260)
+        if primary.source_type == "github"
+        else ""
+    )
 
     if action == RecommendedAction.MVP:
         why = (

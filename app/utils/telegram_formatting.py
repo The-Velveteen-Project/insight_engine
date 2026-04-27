@@ -28,6 +28,7 @@ from app.schemas.editorial import (
     RecommendedAction,
 )
 from app.schemas.goals import ActiveGoal
+from app.schemas.linkedin import LinkedInPost, LinkedInPromptKit
 from app.schemas.mvp_handoff import MvpHandoffPack
 
 _SOLID_SIGNAL_THRESHOLD = 0.45
@@ -878,6 +879,79 @@ def format_no_pending_followup() -> str:
     return (
         "No tengo recordatorios abiertos por dismissar. Si quieres ver lo que "
         "está vivo: <code>weekly</code>."
+    )
+
+
+def _assemble_linkedin_body(post: LinkedInPost) -> str:
+    """Stitch hook + paragraphs + closing + hashtags into a paste-ready block.
+
+    Blank lines between paragraphs are preserved so when Carlos pastes into
+    LinkedIn the rendering matches what he sees in Telegram.
+    """
+    sections: list[str] = [post.hook.strip(), ""]
+    for paragraph in post.body_paragraphs:
+        sections.append(paragraph.strip())
+        sections.append("")
+    sections.append(post.closing.strip())
+    if post.hashtags:
+        tag_line = " ".join(f"#{tag.strip().lstrip('#')}" for tag in post.hashtags)
+        sections.extend(["", tag_line])
+    return "\n".join(sections).strip()
+
+
+def format_linkedin_post(
+    post: LinkedInPost,
+    *,
+    plan_id: int,
+    llm_used: bool,
+) -> str:
+    body = _assemble_linkedin_body(post)
+    char_count = len(body)
+    source_note = (
+        "Generado con LLM editorial."
+        if llm_used
+        else (
+            "Generado con fallback determinista — el LLM no estaba disponible. "
+            "Léelo como borrador, no como post listo."
+        )
+    )
+    lines = [
+        f"<b>📋 LinkedIn — plan #{plan_id}</b>",
+        (
+            "Listo para copiar. Mantén los saltos de línea cuando lo pegues "
+            "(LinkedIn los respeta como párrafos en mobile)."
+        ),
+        "",
+        f"<pre>{escape_text(body)}</pre>",
+        "",
+        f"<i>{char_count} caracteres · {source_note}</i>",
+        (
+            "Antes de publicar: revísalo, ajústalo y dale tu voz final. "
+            "Soy bueno produciendo, no soy tu publisher."
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def format_linkedin_prompt_kit(kit: LinkedInPromptKit) -> str:
+    """Render the portable prompt kit so Carlos can paste it elsewhere."""
+    return "\n".join(
+        [
+            f"<b>🧰 Prompt kit de LinkedIn — plan #{kit.plan_id}</b>",
+            (
+                "Pégalo en Claude / ChatGPT / Cursor cuando quieras "
+                "iterar tú mismo el post."
+            ),
+            "",
+            "<b>System prompt</b>",
+            f"<pre>{escape_text(kit.system_prompt)}</pre>",
+            "",
+            "<b>User prompt</b>",
+            f"<pre>{escape_text(kit.user_prompt)}</pre>",
+            "",
+            "<b>One-liner para chat UIs (úsalo como mensaje de apertura)</b>",
+            f"<pre>{escape_text(kit.one_line_paste_command)}</pre>",
+        ]
     )
 
 

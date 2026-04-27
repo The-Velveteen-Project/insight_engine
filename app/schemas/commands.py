@@ -28,6 +28,8 @@ class CommandName(StrEnum):
     MVP_HANDOFF = "mvp_handoff"
     GOAL = "goal"
     CLEAR_GOAL = "clear_goal"
+    LINKEDIN = "linkedin"
+    LINKEDIN_PROMPT = "linkedin_prompt"
     HELP = "help"
     UNKNOWN = "unknown"
 

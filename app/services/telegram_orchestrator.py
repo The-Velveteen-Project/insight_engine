@@ -55,6 +55,7 @@ from app.services import (
     editorial_planner,
     github_insight_service,
     handoff_followups,
+    linkedin_writer,
     mvp_handoff,
 )
 from app.services.generation import get_weekly_thesis_generator
@@ -79,12 +80,27 @@ _ID_REQUIRED = {
     CommandName.SHOW_PLAN,
     CommandName.SHOW_DRAFT,
     CommandName.MVP_HANDOFF,
+    CommandName.LINKEDIN,
+    CommandName.LINKEDIN_PROMPT,
 }
 _DISCOVERY_LABELS: dict[str, str] = {
     "arxiv": "arXiv API",
     "hackernews": "Hacker News Algolia",
     "github": "GitHub REST",
 }
+_LINKEDIN_PROMPT_RE = re.compile(
+    r"^(?:dame|sacame|preparame)?\s*(?:el\s+)?prompt\s+"
+    r"(?:de\s+|para\s+)?linked[Ii]n\s*"
+    r"(?:del?\s+plan)?\s*(?P<target>\d+)?\s*$",
+    re.I,
+)
+_LINKEDIN_POST_RE = re.compile(
+    r"^(?:armame|preparame|sacame|dame|hazme)?\s*"
+    r"(?:el\s+|un\s+)?post\s+(?:de\s+|para\s+)?linked[Ii]n\s*"
+    r"(?:del?\s+plan)?\s*(?P<target>\d+)?\s*$",
+    re.I,
+)
+
 _NATURAL_INTENTS: list[tuple[re.Pattern[str], CommandName]] = [
     (
         re.compile(r"^(?:help|ayuda|qué puedes hacer|que puedes hacer)\s*$", re.I),
@@ -189,6 +205,8 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "mvp_handoff": CommandName.MVP_HANDOFF,
     "goal": CommandName.GOAL,
     "clear_goal": CommandName.CLEAR_GOAL,
+    "linkedin": CommandName.LINKEDIN,
+    "linkedin_prompt": CommandName.LINKEDIN_PROMPT,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -304,6 +322,8 @@ def _usage(command_name: CommandName) -> str:
         CommandName.SHOW_PLAN: "/show_plan <plan_id>",
         CommandName.SHOW_DRAFT: "/show_draft <draft_id>",
         CommandName.MVP_HANDOFF: "/mvp_handoff <plan_id>",
+        CommandName.LINKEDIN: "/linkedin <plan_id>",
+        CommandName.LINKEDIN_PROMPT: "/linkedin_prompt <plan_id>",
     }
     example = examples.get(command_name)
     if example is None:
@@ -679,6 +699,48 @@ def _natural_command(
         return ParsedTelegramCommand(
             name=CommandName.GOAL,
             query=goal_set_match.group("query").strip(),
+            raw_text=text,
+        )
+
+    # `prompt linkedin ...` must match before the post pattern, otherwise
+    # "post" rules would never be reached for this phrasing.
+    linkedin_prompt_match = _LINKEDIN_PROMPT_RE.match(normalized)
+    if linkedin_prompt_match is not None:
+        target = linkedin_prompt_match.group("target")
+        resolved = (
+            _resolve_plan_target(target, state)
+            if target
+            else (state.last_plan_id if state else None)
+        )
+        if resolved is None:
+            return ParsedTelegramCommand(
+                name=CommandName.LINKEDIN_PROMPT,
+                query=None,
+                raw_text=text,
+            )
+        return ParsedTelegramCommand(
+            name=CommandName.LINKEDIN_PROMPT,
+            query=str(resolved),
+            raw_text=text,
+        )
+
+    linkedin_post_match = _LINKEDIN_POST_RE.match(normalized)
+    if linkedin_post_match is not None:
+        target = linkedin_post_match.group("target")
+        resolved = (
+            _resolve_plan_target(target, state)
+            if target
+            else (state.last_plan_id if state else None)
+        )
+        if resolved is None:
+            return ParsedTelegramCommand(
+                name=CommandName.LINKEDIN,
+                query=None,
+                raw_text=text,
+            )
+        return ParsedTelegramCommand(
+            name=CommandName.LINKEDIN,
+            query=str(resolved),
             raw_text=text,
         )
 
@@ -1750,6 +1812,28 @@ async def handle_command(
             _set_pending(chat_id, command_name=None, target_id=None)
             await _persist_state(db, chat_id)
             return _format_mvp_handoff(pack)
+
+        if command.name == CommandName.LINKEDIN:
+            try:
+                post, llm_used = await linkedin_writer.build_linkedin_post(
+                    db, entity_id
+                )
+            except LookupError:
+                return _not_found("Plan", entity_id)
+            return telegram_formatting.format_linkedin_post(
+                post,
+                plan_id=entity_id,
+                llm_used=llm_used,
+            )
+
+        if command.name == CommandName.LINKEDIN_PROMPT:
+            try:
+                kit = await linkedin_writer.build_linkedin_prompt_kit(
+                    db, entity_id
+                )
+            except LookupError:
+                return _not_found("Plan", entity_id)
+            return telegram_formatting.format_linkedin_prompt_kit(kit)
 
     if command.name == CommandName.PAPERS:
         raw_query = command.query or ""
