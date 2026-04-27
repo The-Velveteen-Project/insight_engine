@@ -976,3 +976,41 @@ def format_mvp_handoff_summary(pack: MvpHandoffPack) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def format_signal_explain(
+    signals: list[dict[str, str | None]],
+) -> str:
+    """Detailed per-signal breakdown in response to 'de qué trata cada uno?'.
+
+    Each entry in `signals` must have: source_label, title, summary, url.
+    Summary is shown up to ~380 chars at a sentence boundary.
+    """
+    if not signals:
+        return "No tengo señales recientes guardadas en contexto."
+
+    lines: list[str] = [f"<b>Las {len(signals)} señales en más detalle:</b>", ""]
+    for i, sig in enumerate(signals, 1):
+        source = escape_text(str(sig.get("source_label") or "fuente"))
+        title = str(sig.get("title") or "")
+        summary = str(sig.get("summary") or "")
+        url = str(sig.get("url") or "") or None
+
+        # Trim summary to a readable length at a sentence boundary
+        trimmed = compact_text(summary, 380)
+
+        title_fmt = _signal_link(f"#{i} {title}", url) if url else (
+            f"<b>{escape_text(compact_text(title, 200))}</b>"
+        )
+        lines.append(f"<code>{source}</code> · {title_fmt}")
+        if trimmed:
+            lines.append(f"  {escape_text(trimmed)}")
+        if url:
+            lines.append(f'  ↗ <a href="{escape_text(url)}">abrir fuente</a>')
+        lines.append("")
+
+    lines.append(
+        "Si querés armar un plan sobre alguna, decime el número "
+        "o usá <code>/plan &lt;id&gt;</code>."
+    )
+    return "\n".join(lines)

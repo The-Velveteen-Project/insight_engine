@@ -173,6 +173,19 @@ _GOAL_QUERY_RE = re.compile(
     r"muestrame mi goal|muéstrame mi goal|mi goal)\s*$",
     re.I,
 )
+_EXPLAIN_SIGNALS_RE = re.compile(
+    r"(?:"
+    r"podr[ií]as?\s+(?:explicar(?:me)?|contarme|detallar(?:me)?)"
+    r"|explica(?:me)?\s+(?:mejor|mas|más|cada uno|los|estas?)"
+    r"|cu[eé]ntame\s+(?:mas|más|mejor|sobre cada|de qu[eé])"
+    r"|de\s+qu[eé]\s+(?:trata|van|se\s+trata)"
+    r"|qu[eé]\s+(?:son|dice[ns]?|trata[ns]?)\s+(?:cada uno|estas?|los|las)"
+    r"|mas\s+(?:detalle|info|contexto)"
+    r"|m[aá]s\s+(?:detalle|info|contexto)"
+    r"|detalla(?:me)?\s+(?:cada uno|los|las|estas?)"
+    r")",
+    re.I,
+)
 _GOAL_CLEAR_RE = re.compile(
     r"^(?:borra (?:mi |el )?goal|limpia (?:mi |el )?goal|"
     r"olvida (?:mi |el )?goal|quita (?:mi |el )?goal)\s*$",
@@ -683,6 +696,13 @@ def _natural_command(
             query="__dismiss_followup__",
             raw_text=text,
         )
+    if _EXPLAIN_SIGNALS_RE.search(lowered):
+        if state and state.last_signal_ids:
+            return ParsedTelegramCommand(
+                name=CommandName.EXPLAIN_SIGNALS,
+                query=None,
+                raw_text=text,
+            )
     if _GOAL_QUERY_RE.match(lowered):
         return ParsedTelegramCommand(
             name=CommandName.GOAL,
@@ -1697,6 +1717,28 @@ async def handle_command(
         if archived is None:
             return telegram_formatting.format_no_active_goal()
         return telegram_formatting.format_goal_cleared(archived)
+
+    if command.name == CommandName.EXPLAIN_SIGNALS:
+        state = _get_state(chat_id)
+        signal_ids = state.last_signal_ids if state else []
+        if not signal_ids:
+            return (
+                "No tengo señales recientes en contexto. "
+                "Corre <code>/weekly</code> primero para cargarlas."
+            )
+        rows = await get_signals_by_ids(db, signal_ids)
+        signal_dicts: list[dict[str, str | None]] = []
+        for row in rows:
+            source_type = str(row["source_type"] or "")
+            signal_dicts.append(
+                {
+                    "source_label": _DISCOVERY_LABELS.get(source_type, source_type),
+                    "title": str(row["title"] or ""),
+                    "summary": str(row["summary"] or ""),
+                    "url": str(row["url"]) if row["url"] else None,
+                }
+            )
+        return telegram_formatting.format_signal_explain(signal_dicts)
 
     if command.name in _QUERY_REQUIRED and not command.query:
         return _usage(command.name)
