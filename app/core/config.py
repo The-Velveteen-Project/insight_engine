@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     # Phase 3: voice transcription via OpenAI Whisper
     # Phase 6: draft generation — leave empty until needed
     openai_api_key: str = ""
+    # Sub-phase B.7: redirect the OpenAI client to any OpenAI-compatible
+    # endpoint. Empty = OpenAI default. Examples:
+    #   OpenRouter: https://openrouter.ai/api/v1
+    #   Groq:       https://api.groq.com/openai/v1
+    #   Local Ollama: http://localhost:11434/v1
+    # Whisper transcription stays on OpenAI native; everything else (editorial,
+    # draft, weekly thesis, linkedin, handoff match) honors this override.
+    openai_base_url: str = ""
     whisper_model: str = "whisper-1"
     editorial_model: str = "gpt-4.1-mini"
 

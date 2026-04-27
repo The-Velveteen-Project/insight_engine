@@ -11,6 +11,7 @@ import logging
 from typing import Protocol, runtime_checkable
 
 from app.core.config import settings
+from app.integrations.openai_compat import build_async_openai_client
 from app.prompts.drafts import DRAFT_SYSTEM_PROMPT, build_draft_prompt
 from app.prompts.editorial import (
     EDITORIAL_SYSTEM_PROMPT,
@@ -67,9 +68,7 @@ class OpenAIEditorialGenerator:
     """
 
     def __init__(self, api_key: str, model: str) -> None:
-        from openai import AsyncOpenAI
-
-        self._client = AsyncOpenAI(api_key=api_key)
+        self._client = build_async_openai_client(api_key=api_key)
         self._model = model
 
     async def _parse_structured_response(
@@ -110,9 +109,7 @@ class OpenAIDraftGenerator:
     """
 
     def __init__(self, api_key: str, model: str) -> None:
-        from openai import AsyncOpenAI
-
-        self._client = AsyncOpenAI(api_key=api_key)
+        self._client = build_async_openai_client(api_key=api_key)
         self._model = model
 
     async def _parse_structured_response(
@@ -160,9 +157,10 @@ class OpenAIWeeklyThesisGenerator:
         model: str,
         timeout_seconds: float,
     ) -> None:
-        from openai import AsyncOpenAI
-
-        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+        self._client = build_async_openai_client(
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
         self._model = model
 
     async def _parse_structured_response(
@@ -203,9 +201,10 @@ class OpenAIHandoffMatcher:
         model: str,
         timeout_seconds: float,
     ) -> None:
-        from openai import AsyncOpenAI
-
-        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+        self._client = build_async_openai_client(
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
         self._model = model
 
     async def _parse_structured_response(

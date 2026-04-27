@@ -19,6 +19,7 @@ import aiosqlite
 
 from app.core.config import settings
 from app.db.queries import get_signals_by_ids
+from app.integrations.openai_compat import build_async_openai_client
 from app.prompts.linkedin import (
     LINKEDIN_SYSTEM_PROMPT,
     build_linkedin_prompt_kit_text,
@@ -81,32 +82,63 @@ async def _build_input(
 
 
 def _fallback_post(context: LinkedInPostInput) -> LinkedInPost:
-    """Sober deterministic post used when the LLM is not available.
+    """Honest skeleton post used when the LLM is unavailable.
 
-    Honest about being a draft; the formatter will frame it as such so
-    Carlos does not paste it as-is by accident.
+    The previous version stitched the editorial templates directly into the
+    body, which produced text like "Cerrar con una implicación..." literal —
+    those strings are *instructions* to a draft writer, not content. This
+    version returns a single coherent skeleton that flags itself as a draft
+    so Carlos rewrites it before publishing instead of pasting it as-is.
     """
     primary = context.signals[0]
+    title_clip = primary.title.strip()
+    if len(title_clip) > 120:
+        title_clip = title_clip[:117].rsplit(" ", 1)[0]
+    angle_lower = context.angle.lower()
+    sources_label = (
+        "tu repo"
+        if primary.source_type == "github"
+        else "una pieza externa que vi esta semana"
+    )
+
     hook = (
-        f"Esta semana revisé la línea de \"{primary.title[:120]}\" "
-        "y vale la pena dejar una nota corta sobre lo que veo."
-    )[:200]
-    body = [
-        context.why_it_matters,
-        context.angle,
-        context.portfolio_value,
-    ]
-    closing = context.draft_closing
+        f"Borrador (escríbelo tú): "
+        f"esta semana volví sobre {sources_label} y quiero dejar una nota "
+        "corta antes de que se diluya."
+    )[:240]
+
+    main = (
+        f"La línea es: {title_clip}. "
+        f"Lo que me interesa es el ángulo concreto — "
+        f"{context.angle.rstrip('.').lower()}."
+    )
+
+    grounded = (
+        f"Por qué importa para mí ahora: {context.why_it_matters.rstrip('.')}. "
+        "No estoy todavía en posición de afirmar más que eso; lo dejo aquí "
+        "porque la línea me parece defendible."
+    )
+
+    body_paragraphs = [main, grounded]
+    closing = (
+        "¿Qué señal usarías tú para evaluar este ángulo en tu propio trabajo? "
+        "Borrador armado sin asistente; lo afilo en el siguiente pase."
+    )
+
     hashtags: list[str] = []
-    if "agentic" in context.angle.lower() or "agent" in context.angle.lower():
+    if "agentic" in angle_lower or "agent" in angle_lower:
         hashtags.append("AgenticWorkflows")
-    if "ml" in context.angle.lower() or "machine learning" in context.angle.lower():
+    if (
+        "machine learning" in angle_lower
+        or "ml" in angle_lower
+        or "neural" in angle_lower
+    ):
         hashtags.append("MachineLearning")
     if not hashtags:
         hashtags = ["AppliedAI", "AppliedDecisionSystems"]
     return LinkedInPost(
         hook=hook,
-        body_paragraphs=body,
+        body_paragraphs=body_paragraphs,
         closing=closing,
         hashtags=hashtags,
     )
@@ -121,9 +153,10 @@ class OpenAILinkedInWriter:
         model: str,
         timeout_seconds: float,
     ) -> None:
-        from openai import AsyncOpenAI
-
-        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+        self._client = build_async_openai_client(
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
         self._model = model
 
     async def _parse_structured_response(

@@ -1673,6 +1673,61 @@ async def test_handle_command_linkedin_marks_fallback_when_llm_unavailable(
     assert "fallback determinista" in response
 
 
+def test_linkedin_fallback_does_not_stitch_template_instructions() -> None:
+    """Regression: the old fallback inlined editorial *instructions* like
+    'Cerrar con una implicación...' as if they were post body. The new one
+    must produce a coherent skeleton flagged as a draft.
+    """
+    from app.schemas.editorial import EditorialSignalContext, RecommendedAction
+    from app.schemas.linkedin import LinkedInPostInput
+    from app.services.linkedin_writer import _fallback_post
+
+    context = LinkedInPostInput(
+        plan_id=99,
+        recommended_action=RecommendedAction.NOTE,
+        angle=(
+            "Una nota técnica sobria que explique la lección concreta y su "
+            "implicación para tu trabajo."
+        ),
+        why_it_matters=(
+            "La señal apunta a una lección reproducible sobre evaluación "
+            "de outputs en pipelines agentic."
+        ),
+        portfolio_value="Ayuda a sostener tu narrativa pública.",
+        draft_hook="Abrir con la señal concreta.",
+        draft_points=[
+            "Explicar la implicación.",
+            "Aclarar el tradeoff.",
+        ],
+        draft_closing="Cerrar con una implicación para builds futuros.",
+        signals=[
+            EditorialSignalContext(
+                id=1,
+                source_type="arxiv",
+                source_id="2501.0001",
+                title="Representational Harms in LLM-Generated Narratives",
+                summary="A study of harms.",
+                relevance_score=0.7,
+                relevance_note="primary=['llm']",
+            )
+        ],
+    )
+
+    post = _fallback_post(context)
+    assembled = (
+        post.hook
+        + " "
+        + " ".join(post.body_paragraphs)
+        + " "
+        + post.closing
+    ).lower()
+    # The closing instruction string from draft_closing must NOT leak into
+    # the assembled post — that was the old bug.
+    assert "cerrar con una implicación" not in assembled
+    # The fallback must self-identify as a draft so Carlos rewrites it.
+    assert "borrador" in post.hook.lower() or "borrador" in post.closing.lower()
+
+
 async def test_handle_command_linkedin_prompt_renders_kit(
     db: aiosqlite.Connection,
 ) -> None:
