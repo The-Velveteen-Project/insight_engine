@@ -480,20 +480,27 @@ async def test_plan_editorial_raises_when_some_signals_missing(
 
 async def test_generation_service_returns_structured_output() -> None:
     generator = OpenAIEditorialGenerator(api_key="test-key", model="gpt-4.1-mini")
+    fake_parsed = GeneratedEditorialDraft(
+        why_it_matters="The signal connects public research to concrete execution.",
+        angle="Bridge the research signal into a sober plan",
+        draft_outline=DraftOutline(
+            hook="Signal setup",
+            points=["Lesson", "Constraint"],
+            closing="Next step now",
+        ),
+        portfolio_value="Creates a reusable portfolio artifact.",
+    )
     fake_response = SimpleNamespace(
-        output_parsed=GeneratedEditorialDraft(
-            why_it_matters="The signal connects public research to concrete execution.",
-            angle="Bridge the research signal into a sober plan",
-            draft_outline=DraftOutline(
-                hook="Signal setup",
-                points=["Lesson", "Constraint"],
-                closing="Next step now",
-            ),
-            portfolio_value="Creates a reusable portfolio artifact.",
-        )
+        choices=[SimpleNamespace(message=SimpleNamespace(parsed=fake_parsed))]
     )
     generator._client = SimpleNamespace(  # type: ignore[assignment]
-        responses=SimpleNamespace(parse=AsyncMock(return_value=fake_response))
+        beta=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    parse=AsyncMock(return_value=fake_response)
+                )
+            )
+        )
     )
 
     result = await generator.generate(

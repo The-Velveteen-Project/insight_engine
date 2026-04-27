@@ -203,25 +203,32 @@ async def test_get_persisted_editorial_draft_raises_for_missing(
 
 async def test_draft_generation_service_returns_structured_output() -> None:
     generator = OpenAIDraftGenerator(api_key="test-key", model="gpt-4.1-mini")
+    fake_parsed = EditorialDraftContent(
+        working_title="A sober working title for the approved plan",
+        post_body=(
+            "This is a structured draft body grounded in the approved plan. "
+            "It stays technical, specific, and concise without drifting into hype."
+        ),
+        short_version=(
+            "A concise version of the draft grounded in the approved plan."
+        ),
+        cta="Worth pursuing only if the next pass adds concrete evidence.",
+        tone_notes=[
+            "Keep it technical and specific.",
+            "Avoid hype or generic commentary.",
+        ],
+    )
     fake_response = SimpleNamespace(
-        output_parsed=EditorialDraftContent(
-            working_title="A sober working title for the approved plan",
-            post_body=(
-                "This is a structured draft body grounded in the approved plan. "
-                "It stays technical, specific, and concise without drifting into hype."
-            ),
-            short_version=(
-                "A concise version of the draft grounded in the approved plan."
-            ),
-            cta="Worth pursuing only if the next pass adds concrete evidence.",
-            tone_notes=[
-                "Keep it technical and specific.",
-                "Avoid hype or generic commentary.",
-            ],
-        )
+        choices=[SimpleNamespace(message=SimpleNamespace(parsed=fake_parsed))]
     )
     generator._client = SimpleNamespace(  # type: ignore[assignment]
-        responses=SimpleNamespace(parse=AsyncMock(return_value=fake_response))
+        beta=SimpleNamespace(
+            chat=SimpleNamespace(
+                completions=SimpleNamespace(
+                    parse=AsyncMock(return_value=fake_response)
+                )
+            )
+        )
     )
 
     result = await generator.generate(

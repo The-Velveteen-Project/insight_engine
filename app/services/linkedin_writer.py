@@ -163,15 +163,17 @@ class OpenAILinkedInWriter:
         self,
         context: LinkedInPostInput,
     ) -> LinkedInPost | None:
-        response = await self._client.responses.parse(
+        response = await self._client.beta.chat.completions.parse(
             model=self._model,
-            instructions=LINKEDIN_SYSTEM_PROMPT,
-            input=build_linkedin_user_prompt(context),
-            text_format=LinkedInPost,
-            max_output_tokens=900,
+            messages=[
+                {"role": "system", "content": LINKEDIN_SYSTEM_PROMPT},
+                {"role": "user", "content": build_linkedin_user_prompt(context)},
+            ],
+            response_format=LinkedInPost,
+            max_tokens=900,
             temperature=0.4,
         )
-        parsed = getattr(response, "output_parsed", None)
+        parsed = response.choices[0].message.parsed if response.choices else None
         if not isinstance(parsed, LinkedInPost):
             logger.warning("LinkedIn writer returned no structured output.")
             return None

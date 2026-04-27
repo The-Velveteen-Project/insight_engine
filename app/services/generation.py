@@ -61,10 +61,10 @@ class StructuredWeeklyThesisGenerator(Protocol):
 
 class OpenAIEditorialGenerator:
     """
-    Structured editorial generation via the Responses API.
+    Structured editorial generation via the Chat Completions API.
 
-    Uses Pydantic-based structured outputs so the narrative fields arrive
-    already validated at the integration boundary.
+    Uses beta.chat.completions.parse so the same code works with OpenAI,
+    OpenRouter, Groq, and any other OpenAI-compatible provider.
     """
 
     def __init__(self, api_key: str, model: str) -> None:
@@ -75,15 +75,17 @@ class OpenAIEditorialGenerator:
         self,
         context: EditorialGenerationInput,
     ) -> GeneratedEditorialDraft | None:
-        response = await self._client.responses.parse(
+        response = await self._client.beta.chat.completions.parse(
             model=self._model,
-            instructions=EDITORIAL_SYSTEM_PROMPT,
-            input=build_editorial_prompt(context),
-            text_format=GeneratedEditorialDraft,
-            max_output_tokens=700,
+            messages=[
+                {"role": "system", "content": EDITORIAL_SYSTEM_PROMPT},
+                {"role": "user", "content": build_editorial_prompt(context)},
+            ],
+            response_format=GeneratedEditorialDraft,
+            max_tokens=700,
             temperature=0.2,
         )
-        parsed = getattr(response, "output_parsed", None)
+        parsed = response.choices[0].message.parsed if response.choices else None
         if not isinstance(parsed, GeneratedEditorialDraft):
             logger.warning("Editorial generation returned no structured output.")
             return None
@@ -102,7 +104,7 @@ class OpenAIEditorialGenerator:
 
 class OpenAIDraftGenerator:
     """
-    Structured draft generation via the Responses API.
+    Structured draft generation via the Chat Completions API.
 
     Keeps the same integration boundary as editorial plan generation:
     validated Pydantic output or None on failure.
@@ -116,15 +118,17 @@ class OpenAIDraftGenerator:
         self,
         context: DraftGenerationInput,
     ) -> EditorialDraftContent | None:
-        response = await self._client.responses.parse(
+        response = await self._client.beta.chat.completions.parse(
             model=self._model,
-            instructions=DRAFT_SYSTEM_PROMPT,
-            input=build_draft_prompt(context),
-            text_format=EditorialDraftContent,
-            max_output_tokens=900,
+            messages=[
+                {"role": "system", "content": DRAFT_SYSTEM_PROMPT},
+                {"role": "user", "content": build_draft_prompt(context)},
+            ],
+            response_format=EditorialDraftContent,
+            max_tokens=900,
             temperature=0.2,
         )
-        parsed = getattr(response, "output_parsed", None)
+        parsed = response.choices[0].message.parsed if response.choices else None
         if not isinstance(parsed, EditorialDraftContent):
             logger.warning("Draft generation returned no structured output.")
             return None
@@ -143,12 +147,11 @@ class OpenAIDraftGenerator:
 
 class OpenAIWeeklyThesisGenerator:
     """
-    Structured weekly-thesis generation via the Responses API.
+    Structured weekly-thesis generation via the Chat Completions API.
 
     Produces the opening paragraph of the weekly digest and the proactive
-    handoff flag, using the same Pydantic-structured-output pattern as the
-    editorial generator. Returns None on failure so the caller can fall back
-    to a deterministic synthesis.
+    handoff flag. Returns None on failure so the caller can fall back to
+    a deterministic synthesis.
     """
 
     def __init__(
@@ -167,15 +170,17 @@ class OpenAIWeeklyThesisGenerator:
         self,
         context: WeeklyThesisGenerationInput,
     ) -> WeeklyThesis | None:
-        response = await self._client.responses.parse(
+        response = await self._client.beta.chat.completions.parse(
             model=self._model,
-            instructions=WEEKLY_THESIS_SYSTEM_PROMPT,
-            input=build_weekly_thesis_prompt(context),
-            text_format=WeeklyThesis,
-            max_output_tokens=600,
+            messages=[
+                {"role": "system", "content": WEEKLY_THESIS_SYSTEM_PROMPT},
+                {"role": "user", "content": build_weekly_thesis_prompt(context)},
+            ],
+            response_format=WeeklyThesis,
+            max_tokens=600,
             temperature=0.3,
         )
-        parsed = getattr(response, "output_parsed", None)
+        parsed = response.choices[0].message.parsed if response.choices else None
         if not isinstance(parsed, WeeklyThesis):
             logger.warning("Weekly thesis generation returned no structured output.")
             return None
@@ -211,15 +216,17 @@ class OpenAIHandoffMatcher:
         self,
         context: HandoffMatchInput,
     ) -> HandoffRepoMatch | None:
-        response = await self._client.responses.parse(
+        response = await self._client.beta.chat.completions.parse(
             model=self._model,
-            instructions=HANDOFF_MATCH_SYSTEM_PROMPT,
-            input=build_handoff_match_prompt(context),
-            text_format=HandoffRepoMatch,
-            max_output_tokens=400,
+            messages=[
+                {"role": "system", "content": HANDOFF_MATCH_SYSTEM_PROMPT},
+                {"role": "user", "content": build_handoff_match_prompt(context)},
+            ],
+            response_format=HandoffRepoMatch,
+            max_tokens=400,
             temperature=0.1,
         )
-        parsed = getattr(response, "output_parsed", None)
+        parsed = response.choices[0].message.parsed if response.choices else None
         if not isinstance(parsed, HandoffRepoMatch):
             logger.warning("Handoff match returned no structured output.")
             return None
