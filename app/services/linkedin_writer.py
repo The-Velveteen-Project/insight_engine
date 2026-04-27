@@ -20,6 +20,7 @@ import aiosqlite
 from app.core.config import settings
 from app.db.queries import get_signals_by_ids
 from app.integrations.openai_compat import build_async_openai_client
+from app.services.generation import _structured_completion
 from app.prompts.linkedin import (
     LINKEDIN_SYSTEM_PROMPT,
     build_linkedin_prompt_kit_text,
@@ -145,7 +146,7 @@ def _fallback_post(context: LinkedInPostInput) -> LinkedInPost:
 
 
 class OpenAILinkedInWriter:
-    """Structured LinkedIn post via the Responses API."""
+    """Structured LinkedIn post — provider-agnostic via _structured_completion."""
 
     def __init__(
         self,
@@ -159,35 +160,19 @@ class OpenAILinkedInWriter:
         )
         self._model = model
 
-    async def _parse_structured_response(
-        self,
-        context: LinkedInPostInput,
-    ) -> LinkedInPost | None:
-        response = await self._client.beta.chat.completions.parse(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": LINKEDIN_SYSTEM_PROMPT},
-                {"role": "user", "content": build_linkedin_user_prompt(context)},
-            ],
-            response_format=LinkedInPost,
-            max_tokens=900,
-            temperature=0.4,
-        )
-        parsed = response.choices[0].message.parsed if response.choices else None
-        if not isinstance(parsed, LinkedInPost):
-            logger.warning("LinkedIn writer returned no structured output.")
-            return None
-        return parsed
-
     async def generate(
         self,
         context: LinkedInPostInput,
     ) -> LinkedInPost | None:
-        try:
-            return await self._parse_structured_response(context)
-        except Exception as exc:
-            logger.warning("LinkedIn writer failed: %s", exc)
-            return None
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=LINKEDIN_SYSTEM_PROMPT,
+            user=build_linkedin_user_prompt(context),
+            response_cls=LinkedInPost,
+            max_tokens=900,
+            temperature=0.4,
+        )
 
 
 _writer: OpenAILinkedInWriter | None = None

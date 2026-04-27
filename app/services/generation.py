@@ -7,8 +7,12 @@ must fall back to deterministic output.
 
 from __future__ import annotations
 
+import json as _json
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
+
+from openai import AsyncOpenAI
+from pydantic import BaseModel
 
 from app.core.config import settings
 from app.integrations.openai_compat import build_async_openai_client
@@ -33,6 +37,98 @@ from app.schemas.editorial import (
 from app.schemas.goals import HandoffMatchInput, HandoffRepoMatch
 
 logger = logging.getLogger(__name__)
+
+_BM = TypeVar("_BM", bound=BaseModel)
+
+
+async def _structured_completion(
+    client: AsyncOpenAI,
+    *,
+    model: str,
+    system: str,
+    user: str,
+    response_cls: type[_BM],
+    max_tokens: int,
+    temperature: float,
+) -> "_BM | None":
+    """Provider-agnostic structured LLM call with two-tier fallback.
+
+    Tier 1 — beta.chat.completions.parse():
+        Uses OpenAI-native json_schema structured outputs. Works natively on
+        OpenAI. Some OpenRouter models support it too (those that implement the
+        json_schema response_format spec).
+
+    Tier 2 — chat.completions.create() with response_format json_object:
+        Universally supported by OpenRouter, Groq, Ollama, and almost any
+        provider. We embed the Pydantic JSON schema in the system prompt and
+        parse the raw JSON content manually with Pydantic.
+
+    Only if both tiers fail do we return None, at which point callers must
+    use their deterministic fallback.
+    """
+    messages: list[dict[str, str]] = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+    # Tier 1: structured outputs (preferred — schema-validated by the provider)
+    try:
+        resp = await client.beta.chat.completions.parse(
+            model=model,
+            messages=messages,
+            response_format=response_cls,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        parsed = resp.choices[0].message.parsed if resp.choices else None
+        if isinstance(parsed, response_cls):
+            logger.debug(
+                "Structured output (parse) succeeded for model=%r.", model
+            )
+            return parsed
+    except Exception as exc:
+        logger.debug(
+            "Structured output (parse) unavailable for model=%r, "
+            "falling back to json_object mode: %s",
+            model,
+            exc,
+        )
+
+    # Tier 2: json_object mode — inject schema into system prompt
+    schema = _json.dumps(
+        response_cls.model_json_schema(), ensure_ascii=False, separators=(",", ":")
+    )
+    augmented_system = (
+        f"{system}\n\n"
+        "Respond with ONLY a valid JSON object that exactly matches this "
+        f"schema (no markdown, no extra text):\n{schema}"
+    )
+    try:
+        resp2 = await client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": augmented_system},
+                {"role": "user", "content": user},
+            ],
+            response_format={"type": "json_object"},
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        content = resp2.choices[0].message.content if resp2.choices else None
+        if not content:
+            return None
+        result = response_cls.model_validate_json(content)
+        logger.debug(
+            "Structured output (json_object) succeeded for model=%r.", model
+        )
+        return result
+    except Exception as exc2:
+        logger.warning(
+            "Structured completion both tiers failed for model=%r: %s",
+            model,
+            exc2,
+        )
+        return None
 
 
 @runtime_checkable
@@ -60,99 +156,51 @@ class StructuredWeeklyThesisGenerator(Protocol):
 
 
 class OpenAIEditorialGenerator:
-    """
-    Structured editorial generation via the Chat Completions API.
-
-    Uses beta.chat.completions.parse so the same code works with OpenAI,
-    OpenRouter, Groq, and any other OpenAI-compatible provider.
-    """
+    """Structured editorial generation — provider-agnostic via _structured_completion."""
 
     def __init__(self, api_key: str, model: str) -> None:
         self._client = build_async_openai_client(api_key=api_key)
         self._model = model
 
-    async def _parse_structured_response(
+    async def generate(
         self,
         context: EditorialGenerationInput,
     ) -> GeneratedEditorialDraft | None:
-        response = await self._client.beta.chat.completions.parse(
+        return await _structured_completion(
+            self._client,
             model=self._model,
-            messages=[
-                {"role": "system", "content": EDITORIAL_SYSTEM_PROMPT},
-                {"role": "user", "content": build_editorial_prompt(context)},
-            ],
-            response_format=GeneratedEditorialDraft,
+            system=EDITORIAL_SYSTEM_PROMPT,
+            user=build_editorial_prompt(context),
+            response_cls=GeneratedEditorialDraft,
             max_tokens=700,
             temperature=0.2,
         )
-        parsed = response.choices[0].message.parsed if response.choices else None
-        if not isinstance(parsed, GeneratedEditorialDraft):
-            logger.warning("Editorial generation returned no structured output.")
-            return None
-        return parsed
-
-    async def generate(
-        self,
-        context: EditorialGenerationInput,
-    ) -> GeneratedEditorialDraft | None:
-        try:
-            return await self._parse_structured_response(context)
-        except Exception as exc:
-            logger.warning("Editorial generation failed: %s", exc)
-            return None
 
 
 class OpenAIDraftGenerator:
-    """
-    Structured draft generation via the Chat Completions API.
-
-    Keeps the same integration boundary as editorial plan generation:
-    validated Pydantic output or None on failure.
-    """
+    """Structured draft generation — provider-agnostic via _structured_completion."""
 
     def __init__(self, api_key: str, model: str) -> None:
         self._client = build_async_openai_client(api_key=api_key)
         self._model = model
 
-    async def _parse_structured_response(
+    async def generate(
         self,
         context: DraftGenerationInput,
     ) -> EditorialDraftContent | None:
-        response = await self._client.beta.chat.completions.parse(
+        return await _structured_completion(
+            self._client,
             model=self._model,
-            messages=[
-                {"role": "system", "content": DRAFT_SYSTEM_PROMPT},
-                {"role": "user", "content": build_draft_prompt(context)},
-            ],
-            response_format=EditorialDraftContent,
+            system=DRAFT_SYSTEM_PROMPT,
+            user=build_draft_prompt(context),
+            response_cls=EditorialDraftContent,
             max_tokens=900,
             temperature=0.2,
         )
-        parsed = response.choices[0].message.parsed if response.choices else None
-        if not isinstance(parsed, EditorialDraftContent):
-            logger.warning("Draft generation returned no structured output.")
-            return None
-        return parsed
-
-    async def generate(
-        self,
-        context: DraftGenerationInput,
-    ) -> EditorialDraftContent | None:
-        try:
-            return await self._parse_structured_response(context)
-        except Exception as exc:
-            logger.warning("Draft generation failed: %s", exc)
-            return None
 
 
 class OpenAIWeeklyThesisGenerator:
-    """
-    Structured weekly-thesis generation via the Chat Completions API.
-
-    Produces the opening paragraph of the weekly digest and the proactive
-    handoff flag. Returns None on failure so the caller can fall back to
-    a deterministic synthesis.
-    """
+    """Structured weekly-thesis generation — provider-agnostic via _structured_completion."""
 
     def __init__(
         self,
@@ -166,39 +214,23 @@ class OpenAIWeeklyThesisGenerator:
         )
         self._model = model
 
-    async def _parse_structured_response(
+    async def generate(
         self,
         context: WeeklyThesisGenerationInput,
     ) -> WeeklyThesis | None:
-        response = await self._client.beta.chat.completions.parse(
+        return await _structured_completion(
+            self._client,
             model=self._model,
-            messages=[
-                {"role": "system", "content": WEEKLY_THESIS_SYSTEM_PROMPT},
-                {"role": "user", "content": build_weekly_thesis_prompt(context)},
-            ],
-            response_format=WeeklyThesis,
+            system=WEEKLY_THESIS_SYSTEM_PROMPT,
+            user=build_weekly_thesis_prompt(context),
+            response_cls=WeeklyThesis,
             max_tokens=600,
             temperature=0.3,
         )
-        parsed = response.choices[0].message.parsed if response.choices else None
-        if not isinstance(parsed, WeeklyThesis):
-            logger.warning("Weekly thesis generation returned no structured output.")
-            return None
-        return parsed
-
-    async def generate(
-        self,
-        context: WeeklyThesisGenerationInput,
-    ) -> WeeklyThesis | None:
-        try:
-            return await self._parse_structured_response(context)
-        except Exception as exc:
-            logger.warning("Weekly thesis generation failed: %s", exc)
-            return None
 
 
 class OpenAIHandoffMatcher:
-    """Structured plan↔repo match judgment for handoff follow-ups."""
+    """Structured plan↔repo match judgment — provider-agnostic via _structured_completion."""
 
     def __init__(
         self,
@@ -212,35 +244,19 @@ class OpenAIHandoffMatcher:
         )
         self._model = model
 
-    async def _parse_structured_response(
-        self,
-        context: HandoffMatchInput,
-    ) -> HandoffRepoMatch | None:
-        response = await self._client.beta.chat.completions.parse(
-            model=self._model,
-            messages=[
-                {"role": "system", "content": HANDOFF_MATCH_SYSTEM_PROMPT},
-                {"role": "user", "content": build_handoff_match_prompt(context)},
-            ],
-            response_format=HandoffRepoMatch,
-            max_tokens=400,
-            temperature=0.1,
-        )
-        parsed = response.choices[0].message.parsed if response.choices else None
-        if not isinstance(parsed, HandoffRepoMatch):
-            logger.warning("Handoff match returned no structured output.")
-            return None
-        return parsed
-
     async def generate(
         self,
         context: HandoffMatchInput,
     ) -> HandoffRepoMatch | None:
-        try:
-            return await self._parse_structured_response(context)
-        except Exception as exc:
-            logger.warning("Handoff match generation failed: %s", exc)
-            return None
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=HANDOFF_MATCH_SYSTEM_PROMPT,
+            user=build_handoff_match_prompt(context),
+            response_cls=HandoffRepoMatch,
+            max_tokens=400,
+            temperature=0.1,
+        )
 
 
 _generator: OpenAIEditorialGenerator | None = None
