@@ -133,15 +133,21 @@ async def test_insert_message_persists_flags(db: aiosqlite.Connection) -> None:
 # ---------------------------------------------------------------------------
 
 
-async def test_duplicate_message_raises_integrity_error(
+async def test_duplicate_message_returns_none(
     db: aiosqlite.Connection,
 ) -> None:
-    """Two messages with the same (telegram_chat_id, telegram_message_id) must fail."""
-    msg = _make_message(telegram_message_id=9001, telegram_chat_id=9001)
-    await insert_message(db, msg)
+    """Re-delivering the same (telegram_chat_id, telegram_message_id) must return None.
 
-    with pytest.raises(sqlite3.IntegrityError):
-        await insert_message(db, msg)
+    Telegram retries webhooks that don't get a 200 quickly enough. The old
+    behaviour raised IntegrityError (500); the correct behaviour is to silently
+    swallow the duplicate so the webhook returns 200 without reprocessing.
+    """
+    msg = _make_message(telegram_message_id=9001, telegram_chat_id=9001)
+    first_id = await insert_message(db, msg)
+    assert first_id is not None
+
+    second_id = await insert_message(db, msg)
+    assert second_id is None
 
 
 # ---------------------------------------------------------------------------

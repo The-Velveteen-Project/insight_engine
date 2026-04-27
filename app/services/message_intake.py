@@ -143,6 +143,16 @@ async def handle_update(
     )
 
     persisted_message_id = await insert_message(db, domain_msg)
+    if persisted_message_id is None:
+        # Telegram re-delivered a webhook we already processed. Return 200
+        # silently so Telegram stops retrying without double-executing.
+        logger.debug(
+            "Duplicate webhook ignored: chat_id=%d message_id=%d.",
+            msg.chat.id,
+            msg.message_id,
+        )
+        return
+
     incoming_text = msg.text or msg.caption
     if incoming_text:
         response_text = await handle_operator_text(

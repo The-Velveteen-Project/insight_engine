@@ -11,10 +11,16 @@ from app.schemas.drafts import EditorialDraft, EditorialDraftStatus
 from app.schemas.editorial import EditorialPlan, EditorialPlanStatus
 
 
-async def insert_message(db: aiosqlite.Connection, message: Message) -> int:
+async def insert_message(db: aiosqlite.Connection, message: Message) -> int | None:
+    """Insert a message and return its row id.
+
+    Returns None when the (telegram_chat_id, telegram_message_id) pair already
+    exists — Telegram re-delivers webhooks on timeout, so callers must treat
+    None as "already processed, skip gracefully".
+    """
     cursor = await db.execute(
         """
-        INSERT INTO messages (
+        INSERT OR IGNORE INTO messages (
             telegram_message_id, telegram_chat_id, user_id, username,
             text, source_url, voice_file_id, voice_duration,
             reply_to_telegram_id,
@@ -43,6 +49,10 @@ async def insert_message(db: aiosqlite.Connection, message: Message) -> int:
         ),
     )
     await db.commit()
+    if cursor.rowcount == 0:
+        # Duplicate delivery — INSERT OR IGNORE skipped the row.
+        # Telegram retried a webhook we already handled.
+        return None
     assert cursor.lastrowid is not None
     return cursor.lastrowid
 
