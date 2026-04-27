@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     weekly_focus_label: str = ""
     weekly_use_llm_thesis: bool = True
     weekly_thesis_timeout_seconds: float = 12.0
+    handoff_followup_delay_hours: int = 48
+    handoff_match_timeout_seconds: float = 10.0
 
     db_path: str = "data/engine.db"
     debug: bool = False

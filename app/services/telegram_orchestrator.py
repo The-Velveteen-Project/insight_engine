@@ -14,6 +14,7 @@ import logging
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from json import JSONDecodeError, loads
 from typing import Literal
 
@@ -47,10 +48,12 @@ from app.schemas.editorial import (
 from app.schemas.github import GitHubInsightCandidate
 from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services import (
+    active_goals,
     discovery_service,
     draft_generator,
     editorial_planner,
     github_insight_service,
+    handoff_followups,
     mvp_handoff,
 )
 from app.services.generation import get_weekly_thesis_generator
@@ -131,6 +134,40 @@ _GRATITUDE_RE = re.compile(
     r"^(?:gracias|muchas gracias|gracias!|perfecto|perfecto!|buenisimo|buenísimo)\s*$",
     re.I,
 )
+_POSTPONE_RE = re.compile(
+    r"^(?:despues|después|luego|mas tarde|más tarde|ahora no|"
+    r"todavia no|todavía no|aun no|aún no)\s*$",
+    re.I,
+)
+_PREFER_DRAFT_RE = re.compile(
+    r"^(?:no,?\s*mejor\s*draft|mejor\s*draft|"
+    r"no,?\s*draft|saca(?:me)?\s+(?:el|un)?\s*draft|"
+    r"no,?\s*hazme\s+(?:un\s+)?draft)\s*$",
+    re.I,
+)
+_DISMISS_FOLLOWUP_RE = re.compile(
+    r"^(?:olvidalo|olvídalo|olvida|ya esta|ya está|"
+    r"dejalo|déjalo|cancelar|cancela|nada|nope)\s*$",
+    re.I,
+)
+_GOAL_QUERY_RE = re.compile(
+    r"^(?:cual es mi goal|cuál es mi goal|"
+    r"muestrame mi goal|muéstrame mi goal|mi goal)\s*$",
+    re.I,
+)
+_GOAL_CLEAR_RE = re.compile(
+    r"^(?:borra (?:mi |el )?goal|limpia (?:mi |el )?goal|"
+    r"olvida (?:mi |el )?goal|quita (?:mi |el )?goal)\s*$",
+    re.I,
+)
+_GOAL_SET_RE = re.compile(
+    r"^(?:cambia(?:me)? (?:mi |el )?goal a |"
+    r"renueva (?:mi |el )?goal a |"
+    r"actualiza (?:mi |el )?goal a |"
+    r"pon (?:mi |el )?goal en |"
+    r"mi nuevo goal es )(?P<query>.+)$",
+    re.I,
+)
 _FIRST_TOKENS: dict[str, CommandName] = {
     "start": CommandName.START,
     "help": CommandName.HELP,
@@ -149,6 +186,8 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "show_plan": CommandName.SHOW_PLAN,
     "show_draft": CommandName.SHOW_DRAFT,
     "mvp_handoff": CommandName.MVP_HANDOFF,
+    "goal": CommandName.GOAL,
+    "clear_goal": CommandName.CLEAR_GOAL,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -210,6 +249,16 @@ class _ChatState:
 _CHAT_STATE: dict[int, _ChatState] = {}
 
 
+def invalidate_cached_state(chat_id: int) -> None:
+    """Drop the in-memory cache entry for a chat.
+
+    Used by background workers (e.g. handoff follow-ups) after they update
+    the persisted session row directly, so the next webhook re-reads from
+    SQLite instead of a stale dict.
+    """
+    _CHAT_STATE.pop(chat_id, None)
+
+
 @dataclass(frozen=True)
 class _CandidateRef:
     source_type: Literal["arxiv", "hackernews", "github"]
@@ -269,6 +318,34 @@ def _parse_positive_int(raw_value: str | None) -> int | None:
     except ValueError:
         return None
     return value if value > 0 else None
+
+
+_GOAL_BY_RE = re.compile(r"\s+--by\s+(?P<date>\d{4}-\d{2}-\d{2})\s*$", re.I)
+_GOAL_BY_ATTEMPT_RE = re.compile(r"\s+--by\s+\S", re.I)
+
+
+def _parse_goal_args(raw: str) -> tuple[str, datetime | None] | None:
+    """Parse `<label>` or `<label> --by YYYY-MM-DD`. Returns None if invalid."""
+    text = raw.strip()
+    if not text:
+        return None
+    match = _GOAL_BY_RE.search(text)
+    deadline: datetime | None = None
+    if match is not None:
+        try:
+            parsed = datetime.strptime(match.group("date"), "%Y-%m-%d")
+        except ValueError:
+            return None
+        deadline = parsed.replace(tzinfo=UTC)
+        text = text[: match.start()].rstrip()
+    elif _GOAL_BY_ATTEMPT_RE.search(text):
+        # User tried `--by ...` but the date didn't parse — treat as invalid
+        # rather than swallowing the whole tail into the label.
+        return None
+    label = text.strip().strip('"').strip("'")
+    if len(label) < 4:
+        return None
+    return label, deadline
 
 
 def _strip_accents(text: str) -> str:
@@ -394,7 +471,12 @@ def _remember_plan(chat_id: int | None, plan: PersistedEditorialPlan) -> None:
         state.pending_command = CommandName.APPROVE
         state.pending_target_id = plan.plan_id
     elif plan.status == EditorialPlanStatus.APPROVED:
-        state.pending_command = CommandName.DRAFT
+        # MVP plans get a proactive handoff offer attached to the approve
+        # response, so the next "hazlo" must trigger /mvp_handoff, not /draft.
+        if plan.proposal.recommended_action == RecommendedAction.MVP:
+            state.pending_command = CommandName.MVP_HANDOFF
+        else:
+            state.pending_command = CommandName.DRAFT
         state.pending_target_id = plan.plan_id
     else:
         state.pending_command = None
@@ -548,6 +630,54 @@ def _natural_command(
         return ParsedTelegramCommand(
             name=CommandName.HELP,
             query="__gratitude__",
+            raw_text=text,
+        )
+    if _POSTPONE_RE.match(lowered):
+        if (
+            state is not None
+            and state.pending_command == CommandName.MVP_HANDOFF
+            and state.pending_target_id is not None
+        ):
+            return ParsedTelegramCommand(
+                name=CommandName.HELP,
+                query="__postpone_handoff__",
+                raw_text=text,
+            )
+        # No pending handoff offer: let the message fall through to note capture.
+    if _PREFER_DRAFT_RE.match(lowered):
+        if (
+            state is not None
+            and state.pending_command == CommandName.MVP_HANDOFF
+            and state.pending_target_id is not None
+        ):
+            return ParsedTelegramCommand(
+                name=CommandName.DRAFT,
+                query=str(state.pending_target_id),
+                raw_text=text,
+            )
+    if _DISMISS_FOLLOWUP_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.HELP,
+            query="__dismiss_followup__",
+            raw_text=text,
+        )
+    if _GOAL_QUERY_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.GOAL,
+            query=None,
+            raw_text=text,
+        )
+    if _GOAL_CLEAR_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.CLEAR_GOAL,
+            query=None,
+            raw_text=text,
+        )
+    goal_set_match = _GOAL_SET_RE.match(stripped)
+    if goal_set_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.GOAL,
+            query=goal_set_match.group("query").strip(),
             raw_text=text,
         )
 
@@ -1064,7 +1194,16 @@ async def build_weekly_summary(
     signal_contexts = [_row_to_signal_context(row) for row in signal_rows]
 
     focus_label = settings.weekly_focus_label.strip() or None
-    active_goal = settings.active_goal_text.strip() or None
+
+    current_goal = await active_goals.get_current(db)
+    active_goal_text: str | None = None
+    if current_goal is not None:
+        deadline_summary = telegram_formatting.goal_deadline_summary(current_goal)
+        active_goal_text = (
+            f"{current_goal.label} · {deadline_summary}"
+            if deadline_summary
+            else current_goal.label
+        )
 
     thesis: WeeklyThesis | None = None
     llm_used = False
@@ -1074,7 +1213,7 @@ async def build_weekly_summary(
             plan,
             focus=resolved_query,
             focus_label=focus_label,
-            active_goal=active_goal,
+            active_goal=active_goal_text,
         )
 
     handoff_proposal: str | None = None
@@ -1093,7 +1232,7 @@ async def build_weekly_summary(
         handoff_proposal=handoff_proposal,
         signals_evaluated=signals_evaluated,
         focus_label=focus_label,
-        active_goal=active_goal,
+        active_goal=active_goal_text,
         llm_thesis_used=llm_used,
     )
 
@@ -1267,9 +1406,57 @@ async def handle_command(
             return telegram_formatting.format_draft_short_version(draft)
         if command.name == CommandName.HELP and command.query == "__pending__":
             return _pending_help(state)
+        if command.name == CommandName.HELP and command.query == "__postpone_handoff__":
+            target_plan_id = state.pending_target_id if state is not None else None
+            if target_plan_id is None or chat_id is None:
+                return _pending_help(state)
+            await handoff_followups.schedule_after_postpone(
+                db,
+                plan_id=target_plan_id,
+                chat_id=chat_id,
+            )
+            _set_pending(chat_id, command_name=None, target_id=None)
+            await _persist_state(db, chat_id)
+            return telegram_formatting.format_handoff_postponed(target_plan_id)
+        if command.name == CommandName.HELP and command.query == "__dismiss_followup__":
+            if chat_id is None:
+                return telegram_formatting.format_no_pending_followup()
+            dismissed = await handoff_followups.dismiss_latest_for_chat(db, chat_id)
+            if not dismissed:
+                return telegram_formatting.format_no_pending_followup()
+            _set_pending(chat_id, command_name=None, target_id=None)
+            await _persist_state(db, chat_id)
+            return telegram_formatting.format_followup_dismissed()
         if command.name == CommandName.UNKNOWN:
             return telegram_formatting.format_soft_unknown(command.raw_text)
         return telegram_formatting.format_help()
+
+    if command.name == CommandName.GOAL:
+        if command.query is None:
+            current = await active_goals.get_current(db)
+            if current is None:
+                return telegram_formatting.format_no_active_goal()
+            return telegram_formatting.format_active_goal(current)
+        parsed_goal = _parse_goal_args(command.query)
+        if parsed_goal is None:
+            return (
+                "<b>Usage</b>\n"
+                "<code>/goal &quot;tu objetivo&quot; --by YYYY-MM-DD</code>\n"
+                "El <code>--by</code> es opcional."
+            )
+        label, deadline = parsed_goal
+        new_goal = await active_goals.set_active(
+            db,
+            label=label,
+            deadline_at=deadline,
+        )
+        return telegram_formatting.format_goal_set(new_goal)
+
+    if command.name == CommandName.CLEAR_GOAL:
+        archived = await active_goals.clear_active(db)
+        if archived is None:
+            return telegram_formatting.format_no_active_goal()
+        return telegram_formatting.format_goal_cleared(archived)
 
     if command.name in _QUERY_REQUIRED and not command.query:
         return _usage(command.name)
@@ -1280,10 +1467,12 @@ async def handle_command(
             return _usage(command.name)
 
         if command.name == CommandName.PLAN:
+            current_goal = await active_goals.get_current(db)
             try:
                 plan = await editorial_planner.create_persisted_editorial_plan(
                     db,
                     [entity_id],
+                    goal_id=current_goal.id if current_goal else None,
                 )
             except LookupError:
                 return _not_found("Signal", entity_id)
@@ -1304,7 +1493,13 @@ async def handle_command(
                 return _invalid_transition(str(exc))
             _remember_plan(chat_id, plan)
             await _persist_state(db, chat_id)
-            return _format_plan_updated(plan, verb="approved")
+            response = _format_plan_updated(plan, verb="approved")
+            if plan.proposal.recommended_action == RecommendedAction.MVP:
+                offer = telegram_formatting.format_handoff_offer_after_approve(
+                    plan.plan_id
+                )
+                response += "\n" + offer
+            return response
 
         if command.name == CommandName.DISCARD_PLAN:
             try:
@@ -1322,10 +1517,12 @@ async def handle_command(
             return _format_plan_updated(plan, verb="discarded")
 
         if command.name == CommandName.DRAFT:
+            current_goal = await active_goals.get_current(db)
             try:
                 draft = await draft_generator.create_persisted_editorial_draft(
                     db,
                     entity_id,
+                    goal_id=current_goal.id if current_goal else None,
                 )
             except LookupError:
                 return _not_found("Plan", entity_id)

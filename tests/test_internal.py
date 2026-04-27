@@ -35,7 +35,11 @@ async def test_internal_weekly_summary_runs_job(client) -> None:
 
     mock_run.assert_awaited_once()
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "job": "weekly_summary"}
+    assert response.json() == {
+        "status": "ok",
+        "job": "weekly_summary",
+        "processed": None,
+    }
 
 
 async def test_internal_mvp_scan_runs_job(client) -> None:
@@ -53,4 +57,8 @@ async def test_internal_mvp_scan_runs_job(client) -> None:
 
     mock_run.assert_awaited_once()
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "job": "weekly_mvp_scan"}
+    assert response.json() == {
+        "status": "ok",
+        "job": "weekly_mvp_scan",
+        "processed": None,
+    }

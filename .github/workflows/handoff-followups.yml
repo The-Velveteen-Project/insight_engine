@@ -1,0 +1,23 @@
+name: Handoff Follow-ups
+
+on:
+  schedule:
+    # Every day at 10:00 UTC. Processes any handoff follow-up whose 2-day
+    # deferral has elapsed.
+    - cron: "0 10 * * *"
+  workflow_dispatch:
+
+jobs:
+  process-followups:
+    name: Process Due Follow-ups
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger handoff follow-up processor
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/process-handoff-followups" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 120
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}

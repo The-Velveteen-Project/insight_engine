@@ -971,7 +971,7 @@ async def test_handle_operator_text_uses_chat_memory_for_plan_del_primero(
             chat_id=702,
         )
 
-    mock_create.assert_awaited_once_with(db, [first_id])
+    mock_create.assert_awaited_once_with(db, [first_id], goal_id=None)
     assert response is not None
     assert "Plan #30 created" in response
 
@@ -1011,7 +1011,7 @@ async def test_handle_operator_text_uses_pending_action_for_hazlo_after_signals(
     ) as mock_create:
         response = await handle_operator_text("hazlo", db, chat_id=705)
 
-    mock_create.assert_awaited_once_with(db, [first_id])
+    mock_create.assert_awaited_once_with(db, [first_id], goal_id=None)
     assert response is not None
     assert "Plan #31 created" in response
 
@@ -1076,7 +1076,7 @@ async def test_handle_operator_text_uses_pending_action_for_hazlo_after_approved
     ) as mock_create:
         response = await handle_operator_text("hazlo", db, chat_id=706)
 
-    mock_create.assert_awaited_once_with(db, 45)
+    mock_create.assert_awaited_once_with(db, 45, goal_id=None)
     assert response is not None
     assert "Draft #10 created" in response
 
@@ -1296,3 +1296,211 @@ async def test_handle_operator_text_returns_note_capture_ack(
     )
     assert response is not None
     assert "Registrado como nota manual" in response
+
+
+# --- Sub-phase B: goal commands + handoff offer + postpone/dismiss ---------
+
+
+async def test_handle_command_goal_no_args_when_no_goal(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.services import active_goals
+
+    await active_goals.clear_active(db)
+
+    response = await handle_command("/goal", db)
+    assert "Sin goal activo" in response
+    assert "/goal" in response
+
+
+async def test_handle_command_goal_no_args_shows_current(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.services import active_goals
+
+    await active_goals.clear_active(db)
+    await active_goals.set_active(
+        db,
+        label="cliente $4k posicionando agentic workflows aplicados",
+    )
+
+    response = await handle_command("/goal", db)
+    assert "Goal activo" in response
+    assert "cliente $4k" in response
+
+
+async def test_handle_command_goal_sets_with_deadline(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.services import active_goals
+
+    await active_goals.clear_active(db)
+
+    response = await handle_command(
+        '/goal "cliente $4k posicionando agentic workflows" --by 2026-08-01',
+        db,
+    )
+    assert "Goal activo actualizado" in response
+    assert "cliente $4k" in response
+
+    current = await active_goals.get_current(db)
+    assert current is not None
+    assert current.label == "cliente $4k posicionando agentic workflows"
+    assert current.deadline_at is not None
+    assert current.deadline_at.date().isoformat() == "2026-08-01"
+
+
+async def test_handle_command_goal_invalid_returns_usage(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_command('/goal "x" --by not-a-date', db)
+    assert "Usage" in response
+
+
+async def test_handle_command_clear_goal_archives(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.services import active_goals
+
+    await active_goals.set_active(db, label="goal a borrar pronto")
+
+    response = await handle_command("/clear_goal", db)
+    assert "Goal archivado" in response
+    assert await active_goals.get_current(db) is None
+
+
+async def test_handle_command_approve_mvp_appends_handoff_offer(
+    db: aiosqlite.Connection,
+) -> None:
+    approved = _persisted_plan(
+        88,
+        signal_ids=[5],
+        action=RecommendedAction.MVP,
+        status=EditorialPlanStatus.APPROVED,
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.transition_editorial_plan",
+        new=AsyncMock(return_value=approved),
+    ):
+        response = await handle_command("/approve 88", db, chat_id=801)
+
+    assert "Plan #88 approved" in response
+    assert "MVP handoff" in response
+    assert "Responde:" in response
+    assert "después" in response
+
+
+async def test_handle_command_approve_post_does_not_append_handoff_offer(
+    db: aiosqlite.Connection,
+) -> None:
+    approved = _persisted_plan(
+        89,
+        signal_ids=[5],
+        action=RecommendedAction.POST,
+        status=EditorialPlanStatus.APPROVED,
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.transition_editorial_plan",
+        new=AsyncMock(return_value=approved),
+    ):
+        response = await handle_command("/approve 89", db, chat_id=802)
+
+    assert "Plan #89 approved" in response
+    assert "MVP handoff" not in response
+
+
+async def test_handle_operator_text_postpone_after_mvp_approve(
+    db: aiosqlite.Connection,
+) -> None:
+    approved = _persisted_plan(
+        91,
+        signal_ids=[5],
+        action=RecommendedAction.MVP,
+        status=EditorialPlanStatus.APPROVED,
+    )
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.transition_editorial_plan",
+        new=AsyncMock(return_value=approved),
+    ):
+        await handle_command("/approve 91", db, chat_id=803)
+
+    response = await handle_operator_text("después", db, chat_id=803)
+    assert response is not None
+    assert "2 días" in response
+    assert "#91" in response
+
+    # Followup row exists for this chat.
+    from app.db.queries import get_pending_handoff_followups_for_chat
+
+    rows = await get_pending_handoff_followups_for_chat(db, 803)
+    assert len(rows) == 1
+    assert int(rows[0]["plan_id"]) == 91
+
+
+async def test_handle_operator_text_dismiss_followup(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.services import handoff_followups
+
+    await handoff_followups.schedule_after_postpone(
+        db,
+        plan_id=92,
+        chat_id=804,
+    )
+
+    response = await handle_operator_text("olvídalo", db, chat_id=804)
+    assert response is not None
+    assert "cierro el recordatorio" in response
+
+
+async def test_handle_operator_text_dismiss_when_no_followup(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_operator_text("olvídalo", db, chat_id=805)
+    assert response is not None
+    assert "No tengo recordatorios" in response
+
+
+async def test_handle_operator_text_prefer_draft_after_mvp_approve(
+    db: aiosqlite.Connection,
+) -> None:
+    approved = _persisted_plan(
+        93,
+        signal_ids=[5],
+        action=RecommendedAction.MVP,
+        status=EditorialPlanStatus.APPROVED,
+    )
+    draft = _persisted_draft(31, plan_id=93)
+
+    with patch(
+        "app.services.telegram_orchestrator.editorial_planner.transition_editorial_plan",
+        new=AsyncMock(return_value=approved),
+    ):
+        await handle_command("/approve 93", db, chat_id=806)
+
+    with patch(
+        "app.services.telegram_orchestrator.draft_generator.create_persisted_editorial_draft",
+        new=AsyncMock(return_value=draft),
+    ) as mock_create:
+        response = await handle_operator_text("no, mejor draft", db, chat_id=806)
+
+    assert response is not None
+    assert "Draft #31 created" in response
+    mock_create.assert_awaited_once_with(db, 93, goal_id=None)
+
+
+async def test_handle_operator_text_natural_goal_query(
+    db: aiosqlite.Connection,
+) -> None:
+    from app.services import active_goals
+
+    await active_goals.clear_active(db)
+    await active_goals.set_active(db, label="goal de prueba para query natural")
+
+    response = await handle_operator_text("cuál es mi goal", db, chat_id=807)
+    assert response is not None
+    assert "Goal activo" in response
+    assert "goal de prueba" in response

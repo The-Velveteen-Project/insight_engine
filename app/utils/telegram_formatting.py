@@ -12,6 +12,7 @@ Tone principles:
 from __future__ import annotations
 
 from collections import Counter
+from datetime import UTC, datetime
 from html import escape
 
 from app.schemas.commands import MvpIdeaSuggestion, SignalSuggestion, WeeklySummary
@@ -21,6 +22,7 @@ from app.schemas.editorial import (
     PersistedEditorialPlan,
     RecommendedAction,
 )
+from app.schemas.goals import ActiveGoal
 from app.schemas.mvp_handoff import MvpHandoffPack
 
 _SOLID_SIGNAL_THRESHOLD = 0.45
@@ -664,6 +666,184 @@ def format_draft_summary(
         _continuation_line("<code>muéstramelo</code> para ver el cuerpo completo"),
     ]
     return "\n".join(lines)
+
+
+def goal_deadline_summary(goal: ActiveGoal) -> str | None:
+    if goal.deadline_at is None:
+        return None
+    if goal.deadline_at.tzinfo is None:
+        deadline = goal.deadline_at.replace(tzinfo=UTC)
+    else:
+        deadline = goal.deadline_at
+    now = datetime.now(tz=deadline.tzinfo)
+    delta_days = (deadline - now).days
+    when = deadline.date().isoformat()
+    if delta_days > 1:
+        return f"deadline {when} · {delta_days} días restantes"
+    if delta_days == 1:
+        return f"deadline {when} · queda 1 día"
+    if delta_days == 0:
+        return f"deadline {when} · vence hoy"
+    return f"deadline {when} · vencido hace {abs(delta_days)} días"
+
+
+def format_active_goal(goal: ActiveGoal) -> str:
+    lines = [
+        "<b>Goal activo</b>",
+        _readable_text(goal.label, limit=300),
+    ]
+    if goal.description:
+        lines.append(_readable_text(goal.description, limit=400))
+    deadline_line = goal_deadline_summary(goal)
+    if deadline_line is not None:
+        lines.append(f"<i>{escape_text(deadline_line)}</i>")
+    lines.extend(
+        [
+            "",
+            (
+                "Lo uso para filtrar discovery, anclar la tesis del weekly y "
+                "decidir cuándo proponer un MVP handoff. Si quieres cambiarlo: "
+                "<code>/goal &quot;...&quot; --by YYYY-MM-DD</code>. "
+                "Para borrarlo: <code>/clear_goal</code>."
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_no_active_goal() -> str:
+    return "\n".join(
+        [
+            "<b>Sin goal activo</b>",
+            (
+                "Hoy no estoy filtrando ni sintetizando con un objetivo "
+                "concreto. Si me das uno, todo lo que vea esta semana lo "
+                "evalúo a la luz de eso."
+            ),
+            "",
+            "Por ejemplo:",
+            (
+                "<code>/goal &quot;cliente $4k posicionando agentic workflows "
+                "aplicados&quot; --by 2026-08-01</code>"
+            ),
+        ]
+    )
+
+
+def format_goal_set(goal: ActiveGoal) -> str:
+    lines = [
+        "<b>Goal activo actualizado</b>",
+        _readable_text(goal.label, limit=300),
+    ]
+    deadline_line = goal_deadline_summary(goal)
+    if deadline_line is not None:
+        lines.append(f"<i>{escape_text(deadline_line)}</i>")
+    lines.extend(
+        [
+            "",
+            (
+                "Desde ahora lo uso para anclar el weekly, ranquear discovery "
+                "y proponer handoffs cuando aparezca un plan con tracción de MVP."
+            ),
+        ]
+    )
+    return "\n".join(lines)
+
+
+def format_goal_cleared(goal: ActiveGoal) -> str:
+    return "\n".join(
+        [
+            "<b>Goal archivado</b>",
+            _readable_text(goal.label, limit=300),
+            "",
+            (
+                "Sin goal activo. El weekly y el ranking pierden el filtro de "
+                "horizonte hasta que definas uno nuevo."
+            ),
+        ]
+    )
+
+
+def format_handoff_offer_after_approve(plan_id: int) -> str:
+    return "\n".join(
+        [
+            "",
+            "<b>Veo señal clara de MVP handoff aquí</b>",
+            (
+                f"Puedo armar el handoff del plan #{plan_id} ahora. "
+                "Responde:"
+            ),
+            "• <code>sí</code> o <code>hazlo</code> — armo el handoff ya",
+            (
+                "• <code>después</code> — te pregunto en 2 días si ya "
+                "empezaste o te recuerdo armarlo"
+            ),
+            "• <code>no, mejor draft</code> — saco el draft en su lugar",
+        ]
+    )
+
+
+def format_handoff_postponed(plan_id: int) -> str:
+    return (
+        f"Anotado. En 2 días reviso si ya hay un repo apuntando al plan #{plan_id} "
+        "y te aviso; si no, te recuerdo armarlo."
+    )
+
+
+def format_handoff_followup_with_match(
+    *,
+    plan_id: int,
+    plan_angle: str,
+    repo_full_name: str,
+    rationale: str,
+) -> str:
+    return "\n".join(
+        [
+            "<b>Veo movimiento sobre el plan que dejaste pendiente</b>",
+            f"Plan #{plan_id} — {_readable_text(plan_angle, limit=240)}",
+            "",
+            f"Tu repo <code>{escape_text(repo_full_name)}</code> apunta a esto:",
+            _readable_text(rationale, limit=400),
+            "",
+            (
+                "¿Quieres que lo escalemos a portfolio piece (handoff completo "
+                "+ draft) o seguimos por libre? Responde:"
+            ),
+            "• <code>hazlo</code> — armo el handoff ahora",
+            "• <code>olvídalo</code> — cierro el recordatorio",
+        ]
+    )
+
+
+def format_handoff_followup_no_match(*, plan_id: int, plan_angle: str) -> str:
+    return "\n".join(
+        [
+            "<b>Recordatorio del MVP que quedó pendiente</b>",
+            (
+                f"Han pasado 2 días desde que dijiste *después* al MVP del "
+                f"plan #{plan_id}."
+            ),
+            f"<i>{_readable_text(plan_angle, limit=240)}</i>",
+            "",
+            "No veo todavía un repo apuntando a esto. Responde:",
+            "• <code>hazlo</code> — armo el handoff ahora",
+            "• <code>olvídalo</code> — cierro el recordatorio",
+        ]
+    )
+
+
+def format_followup_dismissed() -> str:
+    return (
+        "Listo, cierro el recordatorio. "
+        "Si después quieres retomar: <code>weekly</code>."
+    )
+
+
+def format_no_pending_followup() -> str:
+    return (
+        "No tengo recordatorios abiertos por dismissar. Si quieres ver lo que "
+        "está vivo: <code>weekly</code>."
+    )
 
 
 def format_mvp_handoff_summary(pack: MvpHandoffPack) -> str:

@@ -9,10 +9,12 @@ from __future__ import annotations
 
 from typing import Annotated
 
+import aiosqlite
 from fastapi import APIRouter, Header, HTTPException, status
 from pydantic import BaseModel
 
 from app.core.config import settings
+from app.services.handoff_followups import process_due_followups
 from app.services.scheduler import run_weekly_mvp_scan_job, run_weekly_summary_job
 
 router = APIRouter(tags=["internal"])
@@ -21,6 +23,7 @@ router = APIRouter(tags=["internal"])
 class InternalJobResponse(BaseModel):
     status: str
     job: str
+    processed: int | None = None
 
 
 def _require_internal_token(x_internal_token: str | None) -> None:
@@ -53,3 +56,18 @@ async def run_mvp_scan(
     _require_internal_token(x_internal_token)
     await run_weekly_mvp_scan_job()
     return InternalJobResponse(status="ok", job="weekly_mvp_scan")
+
+
+@router.post("/process-handoff-followups", response_model=InternalJobResponse)
+async def run_handoff_followups(
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> InternalJobResponse:
+    _require_internal_token(x_internal_token)
+    async with aiosqlite.connect(settings.db_path) as db:
+        db.row_factory = aiosqlite.Row
+        sent = await process_due_followups(db)
+    return InternalJobResponse(
+        status="ok",
+        job="handoff_followups",
+        processed=sent,
+    )

@@ -237,6 +237,7 @@ async def insert_editorial_plan(
     proposal: EditorialPlan,
     *,
     status: EditorialPlanStatus = EditorialPlanStatus.DRAFT,
+    goal_id: int | None = None,
 ) -> int:
     cursor = await db.execute(
         """
@@ -247,8 +248,9 @@ async def insert_editorial_plan(
             proposal_json,
             status,
             llm_used,
-            fallback_used
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            fallback_used,
+            goal_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             json.dumps(proposal.signal_ids),
@@ -258,6 +260,7 @@ async def insert_editorial_plan(
             status.value,
             int(proposal.llm_used),
             int(proposal.fallback_used),
+            goal_id,
         ),
     )
     await db.commit()
@@ -323,6 +326,7 @@ async def insert_editorial_draft(
     draft: EditorialDraft,
     *,
     status: EditorialDraftStatus = EditorialDraftStatus.DRAFT,
+    goal_id: int | None = None,
 ) -> int:
     cursor = await db.execute(
         """
@@ -331,8 +335,9 @@ async def insert_editorial_draft(
             draft_json,
             status,
             llm_used,
-            fallback_used
-        ) VALUES (?, ?, ?, ?, ?)
+            fallback_used,
+            goal_id
+        ) VALUES (?, ?, ?, ?, ?, ?)
         """,
         (
             draft.plan_id,
@@ -340,6 +345,7 @@ async def insert_editorial_draft(
             status.value,
             int(draft.llm_used),
             int(draft.fallback_used),
+            goal_id,
         ),
     )
     await db.commit()
@@ -423,6 +429,154 @@ async def get_telegram_session(
         (chat_id,),
     )
     return await cursor.fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Active goal (Sub-phase B)
+# ---------------------------------------------------------------------------
+
+
+async def get_current_active_goal(
+    db: aiosqlite.Connection,
+) -> aiosqlite.Row | None:
+    """Returns the most recent non-archived goal, or None."""
+    cursor = await db.execute(
+        """
+        SELECT * FROM active_goals
+        WHERE archived_at IS NULL
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+    )
+    return await cursor.fetchone()
+
+
+async def insert_active_goal(
+    db: aiosqlite.Connection,
+    *,
+    label: str,
+    description: str | None,
+    deadline_at: str | None,
+) -> int:
+    cursor = await db.execute(
+        """
+        INSERT INTO active_goals (label, description, deadline_at)
+        VALUES (?, ?, ?)
+        """,
+        (label, description, deadline_at),
+    )
+    await db.commit()
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+async def archive_active_goals(db: aiosqlite.Connection) -> int:
+    """Archives every currently-active goal. Returns the count archived."""
+    cursor = await db.execute(
+        """
+        UPDATE active_goals
+        SET archived_at = CURRENT_TIMESTAMP
+        WHERE archived_at IS NULL
+        """,
+    )
+    await db.commit()
+    return cursor.rowcount or 0
+
+
+async def get_active_goal_by_id(
+    db: aiosqlite.Connection,
+    goal_id: int,
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        "SELECT * FROM active_goals WHERE id = ?",
+        (goal_id,),
+    )
+    return await cursor.fetchone()
+
+
+# ---------------------------------------------------------------------------
+# Handoff follow-ups (Sub-phase B — "después" path)
+# ---------------------------------------------------------------------------
+
+
+async def insert_handoff_followup(
+    db: aiosqlite.Connection,
+    *,
+    plan_id: int,
+    chat_id: int,
+    due_at: str,
+) -> int:
+    cursor = await db.execute(
+        """
+        INSERT INTO pending_handoff_followups (plan_id, chat_id, due_at)
+        VALUES (?, ?, ?)
+        """,
+        (plan_id, chat_id, due_at),
+    )
+    await db.commit()
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+async def get_due_handoff_followups(
+    db: aiosqlite.Connection,
+) -> list[aiosqlite.Row]:
+    """Pending followups whose due_at has passed. Caller iterates and notifies."""
+    cursor = await db.execute(
+        """
+        SELECT * FROM pending_handoff_followups
+        WHERE status = 'pending' AND due_at <= CURRENT_TIMESTAMP
+        ORDER BY due_at ASC
+        """,
+    )
+    rows = await cursor.fetchall()
+    return list(rows)
+
+
+async def get_pending_handoff_followups_for_chat(
+    db: aiosqlite.Connection,
+    chat_id: int,
+) -> list[aiosqlite.Row]:
+    cursor = await db.execute(
+        """
+        SELECT * FROM pending_handoff_followups
+        WHERE chat_id = ? AND status IN ('pending', 'notified')
+        ORDER BY id DESC
+        """,
+        (chat_id,),
+    )
+    rows = await cursor.fetchall()
+    return list(rows)
+
+
+async def mark_handoff_followup_notified(
+    db: aiosqlite.Connection,
+    followup_id: int,
+) -> None:
+    await db.execute(
+        """
+        UPDATE pending_handoff_followups
+        SET status = 'notified', notified_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (followup_id,),
+    )
+    await db.commit()
+
+
+async def mark_handoff_followup_dismissed(
+    db: aiosqlite.Connection,
+    followup_id: int,
+) -> None:
+    await db.execute(
+        """
+        UPDATE pending_handoff_followups
+        SET status = 'dismissed'
+        WHERE id = ?
+        """,
+        (followup_id,),
+    )
+    await db.commit()
 
 
 async def upsert_telegram_session(

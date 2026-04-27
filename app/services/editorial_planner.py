@@ -541,9 +541,11 @@ async def plan_editorial(
 async def create_persisted_editorial_plan(
     db: aiosqlite.Connection,
     signal_ids: list[int],
+    *,
+    goal_id: int | None = None,
 ) -> PersistedEditorialPlan:
     proposal = await plan_editorial(db, signal_ids)
-    plan_id = await insert_editorial_plan(db, proposal)
+    plan_id = await insert_editorial_plan(db, proposal, goal_id=goal_id)
     row = await get_editorial_plan_by_id(db, plan_id)
     if row is None:
         raise LookupError(f"Persisted editorial plan was not found: {plan_id}.")

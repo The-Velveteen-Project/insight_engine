@@ -118,6 +118,34 @@ CREATE TABLE IF NOT EXISTS telegram_sessions (
 )
 """
 
+# Sub-phase B: a single active goal at a time. Older goals are kept
+# (archived_at set) so we can show a simple history later.
+_CREATE_ACTIVE_GOALS = """
+CREATE TABLE IF NOT EXISTS active_goals (
+    id           INTEGER   PRIMARY KEY AUTOINCREMENT,
+    label        TEXT      NOT NULL,
+    description  TEXT,
+    deadline_at  TIMESTAMP,
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    archived_at  TIMESTAMP
+)
+"""
+
+# Sub-phase B: scheduled follow-ups for the "después" path of the proactive
+# MVP handoff. A daily cron processes rows where due_at <= now.
+_CREATE_HANDOFF_FOLLOWUPS = """
+CREATE TABLE IF NOT EXISTS pending_handoff_followups (
+    id          INTEGER   PRIMARY KEY AUTOINCREMENT,
+    plan_id     INTEGER   NOT NULL REFERENCES editorial_plans(id),
+    chat_id     INTEGER   NOT NULL,
+    due_at      TIMESTAMP NOT NULL,
+    status      TEXT      NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending', 'notified', 'dismissed')),
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    notified_at TIMESTAMP
+)
+"""
+
 # Idempotent migrations — ALTER TABLE ADD COLUMN is a no-op if the column
 # already exists (OperationalError is caught and silenced in _migrate).
 _MIGRATIONS: list[str] = [
@@ -127,6 +155,11 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE signals ADD COLUMN source_id TEXT",
     "ALTER TABLE signals ADD COLUMN relevance_score REAL",
     "ALTER TABLE signals ADD COLUMN published_at TIMESTAMP",
+    # Sub-phase B: link plans/drafts to the goal active when they were created.
+    "ALTER TABLE editorial_plans ADD COLUMN goal_id INTEGER"
+    " REFERENCES active_goals(id)",
+    "ALTER TABLE editorial_drafts ADD COLUMN goal_id INTEGER"
+    " REFERENCES active_goals(id)",
 ]
 
 _CREATE_INDEXES = [
@@ -146,6 +179,10 @@ _CREATE_INDEXES = [
     " ON editorial_drafts(status)",
     "CREATE INDEX IF NOT EXISTS idx_telegram_sessions_updated_at"
     " ON telegram_sessions(updated_at)",
+    "CREATE INDEX IF NOT EXISTS idx_active_goals_archived_at"
+    " ON active_goals(archived_at)",
+    "CREATE INDEX IF NOT EXISTS idx_pending_handoff_followups_due"
+    " ON pending_handoff_followups(status, due_at)",
 ]
 
 
@@ -170,6 +207,8 @@ async def init_db() -> None:
         await db.execute(_CREATE_EDITORIAL_PLANS)
         await db.execute(_CREATE_EDITORIAL_DRAFTS)
         await db.execute(_CREATE_TELEGRAM_SESSIONS)
+        await db.execute(_CREATE_ACTIVE_GOALS)
+        await db.execute(_CREATE_HANDOFF_FOLLOWUPS)
         for stmt in _CREATE_INDEXES:
             await db.execute(stmt)
         await _migrate(db)

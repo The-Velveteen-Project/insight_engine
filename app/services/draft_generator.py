@@ -138,6 +138,8 @@ def _build_editorial_draft(
 async def create_persisted_editorial_draft(
     db: aiosqlite.Connection,
     plan_id: int,
+    *,
+    goal_id: int | None = None,
 ) -> PersistedEditorialDraft:
     plan = await get_persisted_editorial_plan(db, plan_id)
     if plan.status != EditorialPlanStatus.APPROVED:
@@ -162,7 +164,7 @@ async def create_persisted_editorial_draft(
         generated = _fallback_content(plan)
 
     draft = _build_editorial_draft(plan, generated, llm_used=llm_used)
-    draft_id = await insert_editorial_draft(db, draft)
+    draft_id = await insert_editorial_draft(db, draft, goal_id=goal_id)
     row = await get_editorial_draft_by_id(db, draft_id)
     if row is None:
         raise LookupError(f"Persisted editorial draft was not found: {draft_id}.")

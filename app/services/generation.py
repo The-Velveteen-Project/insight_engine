@@ -18,6 +18,10 @@ from app.prompts.editorial import (
     build_editorial_prompt,
     build_weekly_thesis_prompt,
 )
+from app.prompts.handoff_match import (
+    HANDOFF_MATCH_SYSTEM_PROMPT,
+    build_handoff_match_prompt,
+)
 from app.schemas.drafts import DraftGenerationInput, EditorialDraftContent
 from app.schemas.editorial import (
     EditorialGenerationInput,
@@ -25,6 +29,7 @@ from app.schemas.editorial import (
     WeeklyThesis,
     WeeklyThesisGenerationInput,
 )
+from app.schemas.goals import HandoffMatchInput, HandoffRepoMatch
 
 logger = logging.getLogger(__name__)
 
@@ -189,9 +194,53 @@ class OpenAIWeeklyThesisGenerator:
             return None
 
 
+class OpenAIHandoffMatcher:
+    """Structured plan↔repo match judgment for handoff follow-ups."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+    ) -> None:
+        from openai import AsyncOpenAI
+
+        self._client = AsyncOpenAI(api_key=api_key, timeout=timeout_seconds)
+        self._model = model
+
+    async def _parse_structured_response(
+        self,
+        context: HandoffMatchInput,
+    ) -> HandoffRepoMatch | None:
+        response = await self._client.responses.parse(
+            model=self._model,
+            instructions=HANDOFF_MATCH_SYSTEM_PROMPT,
+            input=build_handoff_match_prompt(context),
+            text_format=HandoffRepoMatch,
+            max_output_tokens=400,
+            temperature=0.1,
+        )
+        parsed = getattr(response, "output_parsed", None)
+        if not isinstance(parsed, HandoffRepoMatch):
+            logger.warning("Handoff match returned no structured output.")
+            return None
+        return parsed
+
+    async def generate(
+        self,
+        context: HandoffMatchInput,
+    ) -> HandoffRepoMatch | None:
+        try:
+            return await self._parse_structured_response(context)
+        except Exception as exc:
+            logger.warning("Handoff match generation failed: %s", exc)
+            return None
+
+
 _generator: OpenAIEditorialGenerator | None = None
 _draft_generator: OpenAIDraftGenerator | None = None
 _weekly_thesis_generator: OpenAIWeeklyThesisGenerator | None = None
+_handoff_matcher: OpenAIHandoffMatcher | None = None
 
 
 def get_editorial_generator() -> OpenAIEditorialGenerator | None:
@@ -239,3 +288,18 @@ def get_weekly_thesis_generator() -> OpenAIWeeklyThesisGenerator | None:
             settings.editorial_model,
         )
     return _weekly_thesis_generator
+
+
+def get_handoff_matcher() -> OpenAIHandoffMatcher | None:
+    global _handoff_matcher
+    if _handoff_matcher is None and settings.openai_api_key:
+        _handoff_matcher = OpenAIHandoffMatcher(
+            api_key=settings.openai_api_key,
+            model=settings.editorial_model,
+            timeout_seconds=settings.handoff_match_timeout_seconds,
+        )
+        logger.info(
+            "OpenAIHandoffMatcher initialized (model=%s).",
+            settings.editorial_model,
+        )
+    return _handoff_matcher
