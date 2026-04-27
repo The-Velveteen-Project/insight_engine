@@ -13,7 +13,7 @@ from typing import Literal, Self
 
 from pydantic import BaseModel, HttpUrl
 
-SourceType = Literal["arxiv", "hackernews", "github"]
+SourceType = Literal["arxiv", "hackernews", "github", "exa"]
 
 
 class SignalCandidate(BaseModel):

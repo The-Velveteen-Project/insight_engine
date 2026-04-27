@@ -31,7 +31,11 @@ class Settings(BaseSettings):
 
     discovery_default_limit: int = 3
     discovery_fetch_multiplier: int = 4
-    discovery_enabled_sources: str = "arxiv,hackernews"
+    # Default switched from "arxiv,hackernews" to "arxiv,exa" in Sub-phase B.6.
+    # HN remains in the registry for opt-in if you want community-validated
+    # filtering layered on top of semantic search.
+    discovery_enabled_sources: str = "arxiv,exa"
+    exa_api_key: str = ""
     github_token: str = ""
     github_insights_default_limit: int = 5
     github_commits_limit: int = 8

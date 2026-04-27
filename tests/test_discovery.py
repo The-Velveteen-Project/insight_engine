@@ -22,6 +22,9 @@ import pytest
 from app.db.queries import insert_message
 from app.domain.message import Message
 from app.integrations.arxiv_client import _parse_feed
+from app.integrations.exa_client import (
+    _parse_results as _parse_exa_results,
+)
 from app.integrations.hn_client import _parse_hits
 from app.schemas.discovery import SignalCandidate
 from app.services import relevance_ranker
@@ -233,6 +236,91 @@ def test_hn_parse_hits_skips_malformed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# exa_client — JSON parsing
+# ---------------------------------------------------------------------------
+
+_EXA_RESULTS = [
+    {
+        "id": "exa-001",
+        "title": "From Research Question to Scientific Workflow",
+        "url": "https://example.com/paper-001",
+        "publishedDate": "2026-04-22T13:24:00.000Z",
+        "highlights": [
+            "Scientific workflow systems automate execution. ",
+            "They schedule, manage faults, and allocate resources.",
+        ],
+        "score": 0.91,
+    },
+    {
+        "id": "exa-002",
+        "title": "Token consumption in agentic coding tasks",
+        "url": "https://example.com/paper-002",
+        "publishedDate": None,
+        "highlights": ["Wide adoption of AI agents drives token growth."],
+        "score": 0.84,
+    },
+]
+
+
+def test_exa_parse_results_count() -> None:
+    candidates = _parse_exa_results(_EXA_RESULTS)
+    assert len(candidates) == 2
+
+
+def test_exa_parse_results_fields() -> None:
+    candidates = _parse_exa_results(_EXA_RESULTS)
+    first = candidates[0]
+    assert first.source_type == "exa"
+    assert first.source_id == "exa-001"
+    assert "Scientific workflow systems automate execution." in first.summary
+    assert first.published_at is not None
+    second = candidates[1]
+    assert second.published_at is None
+
+
+def test_exa_parse_results_skips_missing_fields() -> None:
+    bad = [
+        {"id": "", "title": "ok", "url": "https://example.com"},
+        {"id": "x", "title": "", "url": "https://example.com"},
+        {"id": "y", "title": "ok", "url": ""},
+    ]
+    assert _parse_exa_results(bad) == []
+
+
+def test_exa_parse_results_uses_title_when_no_highlights() -> None:
+    raw = [
+        {
+            "id": "exa-003",
+            "title": "Standalone title without highlights",
+            "url": "https://example.com/x",
+            "highlights": [],
+        }
+    ]
+    candidates = _parse_exa_results(raw)
+    assert len(candidates) == 1
+    assert candidates[0].summary == "Standalone title without highlights"
+
+
+async def test_exa_fetch_raises_when_api_key_missing(monkeypatch) -> None:
+    """The orchestrator's _safe_fetch surfaces this as a 'failed' source."""
+    from app.integrations import exa_client
+
+    monkeypatch.setattr("app.integrations.exa_client.settings.exa_api_key", "")
+    with pytest.raises(RuntimeError, match="EXA_API_KEY"):
+        await exa_client.fetch("anything")
+
+
+def test_discovery_source_registry_includes_exa_and_legacy_hn() -> None:
+    """Exa is registered; HN stays available for opt-in."""
+    from app.services.discovery_service import _source_registry
+
+    registry = _source_registry()
+    assert "exa" in registry
+    assert "arxiv" in registry
+    assert "hackernews" in registry  # opt-in path preserved
+
+
+# ---------------------------------------------------------------------------
 # discovery_service — unit-level (no DB, mocked clients)
 # ---------------------------------------------------------------------------
 
@@ -302,7 +390,7 @@ async def test_discover_persists_to_db(db: aiosqlite.Connection) -> None:
             new=AsyncMock(return_value=mock_candidates),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -337,7 +425,7 @@ async def test_discover_respects_limit(db: aiosqlite.Connection) -> None:
             new=AsyncMock(return_value=mock_candidates),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -376,7 +464,7 @@ async def test_discover_persists_message_link_when_provided(
             ),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -415,7 +503,7 @@ async def test_discover_refreshes_existing_signal_instead_of_duplicating(
             new=AsyncMock(return_value=[initial]),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -431,7 +519,7 @@ async def test_discover_refreshes_existing_signal_instead_of_duplicating(
             new=AsyncMock(return_value=[refreshed]),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[]),
         ),
     ):
@@ -471,7 +559,7 @@ async def test_discover_source_failure_is_isolated(db: aiosqlite.Connection) -> 
             new=AsyncMock(side_effect=RuntimeError("network error")),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[hn_candidate]),
         ),
     ):
@@ -497,7 +585,7 @@ async def test_discover_deduplicates_across_sources(db: aiosqlite.Connection) ->
             new=AsyncMock(return_value=[from_arxiv]),
         ),
         patch(
-            "app.services.discovery_service.hn_client.fetch",
+            "app.services.discovery_service.exa_client.fetch",
             new=AsyncMock(return_value=[from_hn]),
         ),
     ):

@@ -87,6 +87,7 @@ _DISCOVERY_LABELS: dict[str, str] = {
     "arxiv": "arXiv API",
     "hackernews": "Hacker News Algolia",
     "github": "GitHub REST",
+    "exa": "Exa Neural Search",
 }
 _LINKEDIN_PROMPT_RE = re.compile(
     r"^(?:dame|sacame|preparame)?\s*(?:el\s+)?prompt\s+"
@@ -280,7 +281,7 @@ def invalidate_cached_state(chat_id: int) -> None:
 
 @dataclass(frozen=True)
 class _CandidateRef:
-    source_type: Literal["arxiv", "hackernews", "github"]
+    source_type: Literal["arxiv", "hackernews", "github", "exa"]
     source_id: str
     title: str
     url: str

@@ -33,7 +33,7 @@ import aiosqlite
 
 from app.core.config import settings
 from app.db.queries import insert_signal
-from app.integrations import arxiv_client, hn_client
+from app.integrations import arxiv_client, exa_client, hn_client
 from app.schemas.discovery import SignalCandidate, SourceType
 from app.services import relevance_ranker
 from app.services.query_normalizer import normalize as normalize_query
@@ -84,6 +84,7 @@ def _source_registry() -> dict[str, DiscoverySource]:
     return {
         "arxiv": DiscoverySource(name="arxiv", fetch=arxiv_client.fetch),
         "hackernews": DiscoverySource(name="hackernews", fetch=hn_client.fetch),
+        "exa": DiscoverySource(name="exa", fetch=exa_client.fetch),
     }
 
 
