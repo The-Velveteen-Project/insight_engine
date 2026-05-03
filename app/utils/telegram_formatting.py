@@ -452,22 +452,11 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
             f"<i>Sub-foco de la semana: "
             f"{_readable_text(summary.focus_label, limit=160)}</i>"
         )
-    lines.extend(
-        [
-            "",
-            "<b>Lo que vi esta semana</b>",
-            _readable_text(
-                summary.thesis_paragraph or _weekly_default_thesis(summary),
-                limit=900,
-            ),
-            "",
-        ]
-    )
-
     extra_seen = (
         summary.signals_evaluated
         and summary.signals_evaluated > len(summary.top_signals)
     )
+    lines.append("")
     if extra_seen:
         lines.append(
             "<b>Señales que pasaron el filtro editorial</b> "
@@ -483,7 +472,10 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
         [
             "",
             "<b>Mi lectura</b>",
-            _readable_text(summary.editorial_angle, limit=420),
+            _readable_text(
+                summary.thesis_paragraph or _weekly_default_thesis(summary),
+                limit=900,
+            ),
         ]
     )
 

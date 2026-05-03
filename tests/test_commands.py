@@ -388,7 +388,7 @@ async def test_handle_command_weekly_uses_summary_formatter(
         response = await handle_command("/weekly", db)
 
     assert "Velveteen Operator — Weekly" in response
-    assert "Lo que vi esta semana" in response
+    assert "Señales que pasaron el filtro editorial" in response
     assert "Mi lectura" in response
     assert "Por dónde seguiría yo" in response
     assert "…" not in response
@@ -515,12 +515,11 @@ def test_format_weekly_summary_is_more_explanatory() -> None:
 
     assert "Velveteen Operator — Weekly" in text
     assert "🐇" in text
-    assert "Lo que vi esta semana" in text
-    assert "convergencia entre tu repo" in text
     assert "Señales que pasaron el filtro editorial" in text
     assert "(de 12 vistas)" in text
     assert "Por qué te sirve" in text
     assert "Mi lectura" in text
+    assert "convergencia entre tu repo" in text
     assert "Por dónde seguiría yo" in text
     assert 'href="https://example.com/useful"' in text
     assert "…" not in text
@@ -619,7 +618,7 @@ def test_format_weekly_summary_uses_default_thesis_when_absent() -> None:
 
     text = telegram_formatting.format_weekly_summary(summary)
 
-    assert "Lo que vi esta semana" in text
+    assert "Mi lectura" in text
     # Falls back to a sensible non-empty paragraph, not the old one-liner
     assert "nota técnica" in text.lower()
 
