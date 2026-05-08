@@ -221,6 +221,7 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "clear_goal": CommandName.CLEAR_GOAL,
     "linkedin": CommandName.LINKEDIN,
     "linkedin_prompt": CommandName.LINKEDIN_PROMPT,
+    "opinion": CommandName.OPINION,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -1870,7 +1871,7 @@ async def handle_command(
 
         if command.name == CommandName.LINKEDIN:
             try:
-                post, llm_used = await linkedin_writer.build_linkedin_post(
+                post, llm_used, source_urls = await linkedin_writer.build_linkedin_post(
                     db, entity_id
                 )
             except LookupError:
@@ -1879,6 +1880,7 @@ async def handle_command(
                 post,
                 plan_id=entity_id,
                 llm_used=llm_used,
+                source_urls=source_urls,
             )
 
         if command.name == CommandName.LINKEDIN_PROMPT:
@@ -1889,6 +1891,35 @@ async def handle_command(
             except LookupError:
                 return _not_found("Plan", entity_id)
             return telegram_formatting.format_linkedin_prompt_kit(kit)
+
+    if command.name == CommandName.OPINION:
+        opinion_text = (command.query or "").strip()
+        if not opinion_text:
+            return (
+                "<b>Uso:</b> <code>/opinion &lt;tu perspectiva sobre el artículo&gt;</code>\n\n"
+                "Leé las fuentes del plan y escribí lo que notaste o pensaste. "
+                "Regenero el post de LinkedIn con tu voz como punto de partida."
+            )
+        state = _get_state(chat_id)
+        plan_id = state.last_plan_id if state is not None else None
+        if plan_id is None:
+            return (
+                "No hay un plan activo en este chat. "
+                "Generá uno con <code>/linkedin &lt;plan_id&gt;</code> primero."
+            )
+        try:
+            post, llm_used, source_urls = await linkedin_writer.build_linkedin_post(
+                db, plan_id, founder_opinion=opinion_text
+            )
+        except LookupError:
+            return _not_found("Plan", plan_id)
+        return telegram_formatting.format_linkedin_post(
+            post,
+            plan_id=plan_id,
+            llm_used=llm_used,
+            source_urls=source_urls,
+            opinion_used=True,
+        )
 
     if command.name == CommandName.PAPERS:
         raw_query = command.query or ""

@@ -5,6 +5,7 @@ Tests for Telegram command parsing and orchestration.
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import aiosqlite
@@ -1647,9 +1648,13 @@ async def test_handle_command_linkedin_renders_paste_ready_post(
         hashtags=["AppliedAI", "AgenticWorkflows"],
     )
 
+    _source_urls: list[tuple[str, str | None]] = [
+        ("AgroAskAI paper", "https://example.com/agroaskai"),
+    ]
+
     with patch(
         "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
-        new=AsyncMock(return_value=(post, True)),
+        new=AsyncMock(return_value=(post, True, _source_urls)),
     ) as mock_build:
         response = await handle_command("/linkedin 42", db)
 
@@ -1662,6 +1667,11 @@ async def test_handle_command_linkedin_renders_paste_ready_post(
     # Hashtags prefix preserved
     assert "#AppliedAI" in response
     assert "#AgenticWorkflows" in response
+    # Source URL surfaced
+    assert "AgroAskAI paper" in response
+    assert "https://example.com/agroaskai" in response
+    # /opinion hint shown when no opinion was provided
+    assert "/opinion" in response
 
 
 async def test_handle_command_linkedin_marks_fallback_when_llm_unavailable(
@@ -1678,7 +1688,7 @@ async def test_handle_command_linkedin_marks_fallback_when_llm_unavailable(
 
     with patch(
         "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
-        new=AsyncMock(return_value=(post, False)),
+        new=AsyncMock(return_value=(post, False, [])),
     ):
         response = await handle_command("/linkedin 42", db)
 
@@ -1773,6 +1783,44 @@ async def test_handle_command_linkedin_prompt_renders_kit(
     assert "<pre>" in response
 
 
+async def test_handle_command_opinion_regenerates_post_with_founder_voice(
+    db: aiosqlite.Connection,
+) -> None:
+    """/opinion <text> regenerates the LinkedIn post with founder_opinion injected."""
+    from app.schemas.linkedin import LinkedInPost
+    from app.services.telegram_orchestrator import _CHAT_STATE, _ChatState
+
+    post = LinkedInPost(
+        hook="Lo que noto en AgroAskAI es el patrón de routing.",
+        body_paragraphs=["Mi perspectiva concreta.", "La conexión con StochastoGreen."],
+        closing="¿Usarías el mismo enfoque en tu pipeline de decisiones?",
+        hashtags=["AgenticWorkflows"],
+    )
+    # Seed state so the chat has an active plan
+    _CHAT_STATE[42] = _ChatState(last_plan_id=5, last_signal_ids=[])
+
+    opinion = "el routing multi-agente de AgroAskAI es lo que necesito en StochastoGreen"
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
+        new=AsyncMock(return_value=(post, True, [])),
+    ) as mock_build:
+        response = await handle_command(f"/opinion {opinion}", db, chat_id=42)
+
+    mock_build.assert_awaited_once_with(db, 5, founder_opinion=opinion)
+    assert "LinkedIn — plan #5" in response
+    assert "Lo que noto en AgroAskAI" in response
+    # /opinion hint suppressed when opinion_used=True
+    assert "/opinion" not in response
+
+
+async def test_handle_command_opinion_without_active_plan_returns_guidance(
+    db: aiosqlite.Connection,
+) -> None:
+    response = await handle_command("/opinion sin plan activo", db, chat_id=9999)
+    assert "plan" in response.lower()
+
+
 async def test_handle_operator_text_natural_linkedin_post(
     db: aiosqlite.Connection,
 ) -> None:
@@ -1787,7 +1835,7 @@ async def test_handle_operator_text_natural_linkedin_post(
 
     with patch(
         "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
-        new=AsyncMock(return_value=(post, True)),
+        new=AsyncMock(return_value=(post, True, [])),
     ) as mock_build:
         response = await handle_operator_text(
             "armame el post de linkedin del plan 7",

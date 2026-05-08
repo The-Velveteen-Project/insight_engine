@@ -102,7 +102,18 @@ def build_linkedin_user_prompt(context: LinkedInPostInput) -> str:
         else "Active goal: (none)\n"
     )
 
+    opinion_block = ""
+    if context.founder_opinion:
+        opinion_block = (
+            "CARLOS'S OWN PERSPECTIVE — highest priority input.\n"
+            "Build the entire post around this. Every paragraph should develop,\n"
+            "support, or complicate this point of view. Do NOT summarize the\n"
+            "signal instead — the signal is evidence for this argument.\n"
+            f'"{context.founder_opinion}"\n\n'
+        )
+
     return (
+        f"{opinion_block}"
         f"Plan id: {context.plan_id}\n"
         f"Recommended action: {context.recommended_action.value}\n"
         f"Editorial angle: {context.angle}\n"
@@ -113,9 +124,15 @@ def build_linkedin_user_prompt(context: LinkedInPostInput) -> str:
         f"Draft closing (reference): {context.draft_closing}\n"
         f"{active_goal_block}"
         f"Signals supporting this post:\n{joined_signals}\n\n"
-        "Generate the LinkedIn post fields. Treat the draft hook/points/"
-        "closing as a research outline, not a script — rewrite them in the "
-        "voice rules above."
+        + (
+            "Generate the LinkedIn post. Carlos provided his own perspective above — "
+            "start from that, not from the signal summary. The draft fields are "
+            "structural scaffolding only."
+            if context.founder_opinion
+            else "Generate the LinkedIn post fields. Treat the draft hook/points/"
+            "closing as a research outline, not a script — rewrite them in the "
+            "voice rules above."
+        )
     )
 
 

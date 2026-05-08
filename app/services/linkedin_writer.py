@@ -55,6 +55,8 @@ def _row_to_signal_context(row: aiosqlite.Row) -> EditorialSignalContext:
 async def _build_input(
     db: aiosqlite.Connection,
     plan_id: int,
+    *,
+    founder_opinion: str | None = None,
 ) -> LinkedInPostInput:
     plan = await get_persisted_editorial_plan(db, plan_id)
     proposal = plan.proposal
@@ -79,6 +81,7 @@ async def _build_input(
         draft_closing=proposal.draft_outline.closing,
         signals=signal_contexts,
         active_goal=active_goal_text,
+        founder_opinion=founder_opinion,
     )
 
 
@@ -196,9 +199,19 @@ def get_linkedin_writer() -> OpenAILinkedInWriter | None:
 async def build_linkedin_post(
     db: aiosqlite.Connection,
     plan_id: int,
-) -> tuple[LinkedInPost, bool]:
-    """Returns (post, llm_used). Falls back deterministically on any failure."""
-    context = await _build_input(db, plan_id)
+    *,
+    founder_opinion: str | None = None,
+) -> tuple[LinkedInPost, bool, list[tuple[str, str | None]]]:
+    """Returns (post, llm_used, source_urls).
+
+    source_urls is a list of (title, url) for each signal backing the plan,
+    so the caller can surface them next to the post for Carlos to read before
+    deciding to publish.
+    """
+    context = await _build_input(db, plan_id, founder_opinion=founder_opinion)
+    source_urls: list[tuple[str, str | None]] = [
+        (s.title, s.url) for s in context.signals
+    ]
     writer = get_linkedin_writer()
     if writer is not None:
         try:
@@ -207,8 +220,8 @@ async def build_linkedin_post(
             logger.warning("LinkedIn writer raised: %s", exc)
             generated = None
         if generated is not None:
-            return generated, True
-    return _fallback_post(context), False
+            return generated, True, source_urls
+    return _fallback_post(context), False, source_urls
 
 
 async def build_linkedin_prompt_kit(

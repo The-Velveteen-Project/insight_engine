@@ -897,6 +897,8 @@ def format_linkedin_post(
     *,
     plan_id: int,
     llm_used: bool,
+    source_urls: list[tuple[str, str | None]] | None = None,
+    opinion_used: bool = False,
 ) -> str:
     body = _assemble_linkedin_body(post)
     char_count = len(body)
@@ -917,12 +919,29 @@ def format_linkedin_post(
         "",
         f"<pre>{escape_text(body)}</pre>",
         "",
+    ]
+    if source_urls:
+        lines.append("<b>Fuentes del plan:</b>")
+        for title, url in source_urls:
+            label = escape_text(compact_text(title, 90))
+            if url:
+                lines.append(f'↗ <a href="{escape_text(url)}">{label}</a>')
+            else:
+                lines.append(f"· {label}")
+        lines.append("")
+    if not opinion_used:
+        lines.append(
+            "¿Leíste las fuentes y tenés una perspectiva propia? "
+            "<code>/opinion <tu perspectiva></code> y regenero el post con tu voz."
+        )
+        lines.append("")
+    lines.extend([
         f"<i>{char_count} caracteres · {source_note}</i>",
         (
             "Antes de publicar: revísalo, ajústalo y dale tu voz final. "
             "Soy bueno produciendo, no soy tu publisher."
         ),
-    ]
+    ])
     return "\n".join(lines)
 
 

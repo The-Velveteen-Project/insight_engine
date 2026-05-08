@@ -55,6 +55,7 @@ class LinkedInPostInput(BaseModel):
     draft_closing: str = Field(min_length=8, max_length=180)
     signals: list[EditorialSignalContext] = Field(min_length=1, max_length=3)
     active_goal: str | None = Field(default=None, max_length=400)
+    founder_opinion: str | None = Field(default=None, max_length=1000)
 
 
 class LinkedInPromptKit(BaseModel):

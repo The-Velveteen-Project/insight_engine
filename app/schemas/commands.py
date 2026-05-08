@@ -30,6 +30,7 @@ class CommandName(StrEnum):
     CLEAR_GOAL = "clear_goal"
     LINKEDIN = "linkedin"
     LINKEDIN_PROMPT = "linkedin_prompt"
+    OPINION = "opinion"
     EXPLAIN_SIGNALS = "explain_signals"
     HELP = "help"
     UNKNOWN = "unknown"
