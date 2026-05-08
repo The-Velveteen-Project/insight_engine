@@ -551,8 +551,9 @@ def format_mvp_idea(idea: MvpIdeaSuggestion) -> str:
         ),
         "",
         "<b>Mi lectura</b>",
-        _readable_text(idea.thesis, limit=260),
-        _readable_text(idea.why_it_matters, limit=260),
+        _readable_text(idea.thesis, limit=700),
+        "",
+        _readable_text(idea.why_it_matters, limit=500),
         "",
         (
             "<b>Por qué no la tomaría más grande</b>"
@@ -954,7 +955,7 @@ def format_mvp_handoff_summary(pack: MvpHandoffPack) -> str:
         f"Plan: <code>#{pack.plan_id}</code> · señales: <code>{signal_text}</code>",
         "",
         "<b>Tesis</b>",
-        _readable_text(pack.thesis, limit=240),
+        _readable_text(pack.thesis, limit=500),
         "",
         "<b>Scope sugerido</b>",
         _readable_text(pack.scope_summary, limit=280),

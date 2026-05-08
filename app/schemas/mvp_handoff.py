@@ -20,7 +20,7 @@ class MvpPromptBundle(BaseModel):
 class MvpHandoffPack(BaseModel):
     plan_id: int
     signal_ids: list[int] = Field(min_length=1, max_length=3)
-    thesis: str = Field(min_length=8, max_length=240)
+    thesis: str = Field(min_length=8, max_length=500)
     scope_summary: str = Field(min_length=20, max_length=500)
     builder_target: str = "codex-or-antigravity"
     auditor_target: str = "code-auditor-model"
