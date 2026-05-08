@@ -348,8 +348,12 @@ def _usage(command_name: CommandName) -> str:
 def _parse_positive_int(raw_value: str | None) -> int | None:
     if raw_value is None:
         return None
+    # Strip angle brackets Telegram inserts as placeholders (e.g. "<5>", "<plan_id>")
+    # and common user prefixes like "plan_5" or "plan 5".
+    cleaned = raw_value.strip().lstrip("<").rstrip(">").strip()
+    cleaned = re.sub(r"^plan[_\s]", "", cleaned, flags=re.I).strip()
     try:
-        value = int(raw_value.strip())
+        value = int(cleaned)
     except ValueError:
         return None
     return value if value > 0 else None
@@ -1745,6 +1749,14 @@ async def handle_command(
 
     if command.name in _ID_REQUIRED:
         entity_id = _parse_positive_int(command.query)
+        # For LinkedIn commands with no explicit id, fall back to the last plan
+        # the user interacted with in this chat so they can just type /linkedin.
+        if entity_id is None and command.name in {
+            CommandName.LINKEDIN,
+            CommandName.LINKEDIN_PROMPT,
+        }:
+            state = _get_state(chat_id)
+            entity_id = state.last_plan_id if state is not None else None
         if entity_id is None:
             return _usage(command.name)
 

@@ -206,6 +206,19 @@ def test_parse_command_returns_unknown_for_invalid_text() -> None:
     assert parsed.name == CommandName.UNKNOWN
 
 
+def test_parse_command_strips_angle_bracket_placeholders() -> None:
+    """Telegram sometimes passes angle-bracket placeholders verbatim."""
+    from app.services.telegram_orchestrator import _parse_positive_int
+
+    assert _parse_positive_int("<5>") == 5
+    assert _parse_positive_int("<plan_id>") is None  # not a number
+    assert _parse_positive_int("plan_5") == 5
+    assert _parse_positive_int("plan 13") == 13
+    assert _parse_positive_int("5") == 5
+    assert _parse_positive_int(None) is None
+    assert _parse_positive_int("0") is None
+
+
 async def test_handle_command_help_returns_guide(db: aiosqlite.Connection) -> None:
     response = await handle_command("/help", db)
     assert "Velveteen Operator" in response
