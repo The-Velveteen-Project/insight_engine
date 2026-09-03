@@ -1,8 +1,13 @@
 """
 Query normalizer — translates search queries to English for external APIs.
 
-Uses Claude Haiku when ANTHROPIC_API_KEY is configured.
-Falls back to the original query silently on any error or missing key.
+Provider order:
+1. Claude Haiku when ANTHROPIC_API_KEY is configured.
+2. Otherwise the OpenAI-compatible client (OPENAI_API_KEY, EDITORIAL_MODEL),
+   so a single OpenAI key is enough to run the whole system.
+3. Otherwise the original query, unchanged.
+
+Falls back to the original query silently on any error.
 
 Design constraints:
 - Non-fatal: caller always receives a usable string.
@@ -18,7 +23,10 @@ import logging
 from collections import OrderedDict
 from typing import Any
 
+from openai.types.chat import ChatCompletionMessageParam
+
 from app.core.config import settings
+from app.integrations.openai_compat import build_async_openai_client
 
 logger = logging.getLogger(__name__)
 _CACHE: OrderedDict[str, str] = OrderedDict()
@@ -65,34 +73,68 @@ def _store_cached(query: str, normalized: str) -> None:
         _CACHE.popitem(last=False)
 
 
+async def _normalize_with_anthropic(stripped: str) -> str:
+    from anthropic import AsyncAnthropic  # deferred import
+
+    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+    message = await asyncio.wait_for(
+        client.messages.create(
+            model=settings.normalizer_model,
+            max_tokens=32,
+            system=_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": stripped}],
+        ),
+        timeout=settings.normalizer_timeout_seconds,
+    )
+    return _extract_text(message)
+
+
+async def _normalize_with_openai(stripped: str) -> str:
+    client = build_async_openai_client(
+        api_key=settings.openai_api_key,
+        timeout_seconds=settings.normalizer_timeout_seconds,
+    )
+    messages: list[ChatCompletionMessageParam] = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user", "content": stripped},
+    ]
+    response = await asyncio.wait_for(
+        client.chat.completions.create(
+            model=settings.editorial_model,
+            max_tokens=32,
+            temperature=0,
+            messages=messages,
+        ),
+        timeout=settings.normalizer_timeout_seconds,
+    )
+    if not response.choices:
+        return ""
+    content = response.choices[0].message.content or ""
+    return content.strip()
+
+
 async def normalize(query: str) -> str:
     """
     Return an English-normalized version of `query`.
 
-    Uses Claude Haiku when configured.
-    Falls back to the original query on any error or if key not set.
+    Uses Claude Haiku when configured, else the OpenAI-compatible client.
+    Falls back to the original query on any error or if no key is set.
     """
     stripped = query.strip()
-    if not settings.anthropic_api_key or not stripped:
+    if not stripped:
+        return query
+    if settings.anthropic_api_key:
+        provider = _normalize_with_anthropic
+    elif settings.openai_api_key:
+        provider = _normalize_with_openai
+    else:
         return query
     cached = _get_cached(stripped)
     if cached is not None:
         return cached
 
     try:
-        from anthropic import AsyncAnthropic  # deferred import
-
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-        message = await asyncio.wait_for(
-            client.messages.create(
-                model=settings.normalizer_model,
-                max_tokens=32,
-                system=_SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": stripped}],
-            ),
-            timeout=settings.normalizer_timeout_seconds,
-        )
-        normalized = _extract_text(message).strip('"').strip("'")
+        normalized = (await provider(stripped)).strip('"').strip("'")
         final = normalized or query
         _store_cached(stripped, final)
         if normalized and normalized.lower() != stripped.lower():

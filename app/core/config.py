@@ -42,8 +42,12 @@ class Settings(BaseSettings):
     # Default switched from "arxiv,hackernews" to "arxiv,exa" in Sub-phase B.6.
     # HN remains in the registry for opt-in if you want community-validated
     # filtering layered on top of semantic search.
-    discovery_enabled_sources: str = "arxiv,exa"
+    discovery_enabled_sources: str = "arxiv,exa,rss"
     exa_api_key: str = ""
+    # Editorial feeds (RSS 2.0 or Atom) polled by the "rss" discovery source.
+    discovery_rss_feeds: str = (
+        "https://research.google/blog/rss/,https://openai.com/news/rss.xml"
+    )
     github_token: str = ""
     github_insights_default_limit: int = 5
     github_commits_limit: int = 8
@@ -84,6 +88,12 @@ class Settings(BaseSettings):
             source.strip().lower()
             for source in self.discovery_enabled_sources.split(",")
             if source.strip()
+        )
+
+    @property
+    def discovery_rss_feed_list(self) -> tuple[str, ...]:
+        return tuple(
+            url.strip() for url in self.discovery_rss_feeds.split(",") if url.strip()
         )
 
     @property

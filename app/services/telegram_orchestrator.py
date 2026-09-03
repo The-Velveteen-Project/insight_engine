@@ -88,6 +88,7 @@ _DISCOVERY_LABELS: dict[str, str] = {
     "hackernews": "Hacker News Algolia",
     "github": "GitHub REST",
     "exa": "Exa Neural Search",
+    "rss": "Blogs RSS",
 }
 _LINKEDIN_PROMPT_RE = re.compile(
     r"^(?:dame|sacame|preparame)?\s*(?:el\s+)?prompt\s+"
@@ -295,7 +296,7 @@ def invalidate_cached_state(chat_id: int) -> None:
 
 @dataclass(frozen=True)
 class _CandidateRef:
-    source_type: Literal["arxiv", "hackernews", "github", "exa"]
+    source_type: Literal["arxiv", "hackernews", "github", "exa", "rss"]
     source_id: str
     title: str
     url: str
@@ -988,7 +989,9 @@ async def _candidate_to_suggestion(
         why_it_matters=why_it_matters,
         suggested_action=suggested_action,
         relevance_score=candidate.relevance_score,
-        source_label=_DISCOVERY_LABELS[candidate.source_type],
+        source_label=_DISCOVERY_LABELS.get(
+            candidate.source_type, candidate.source_type
+        ),
         url=candidate.url,
     )
 
@@ -1139,7 +1142,7 @@ def _possible_sources(candidates: list[_CandidateRef]) -> list[str]:
     labels: list[str] = []
     seen: set[str] = set()
     for candidate in candidates:
-        label = _DISCOVERY_LABELS[candidate.source_type]
+        label = _DISCOVERY_LABELS.get(candidate.source_type, candidate.source_type)
         if label in seen:
             continue
         seen.add(label)
@@ -1210,7 +1213,7 @@ def _deterministic_weekly_thesis(
 ) -> WeeklyThesis:
     sources = {signal.source_type for signal in signal_contexts}
     has_own_repo = "github" in sources
-    has_external = bool({"arxiv", "hackernews"} & sources)
+    has_external = bool({"arxiv", "hackernews", "exa", "rss"} & sources)
     is_mvp = plan.recommended_action == RecommendedAction.MVP
 
     own_repo_names = sorted(
@@ -1947,7 +1950,7 @@ async def handle_command(
         candidates, normalized_query = await _discover_refs(
             db,
             raw_query,
-            source_names=("hackernews",),
+            source_names=("hackernews", "rss"),
             message_id=message_id,
         )
         heading = _query_heading("Noticias", raw_query, normalized_query)
