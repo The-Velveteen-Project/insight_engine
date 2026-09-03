@@ -837,3 +837,124 @@ async def reset_editorial_tables(db: aiosqlite.Connection) -> dict[str, int]:
         await db.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
     await db.commit()
     return counts
+
+
+# ---------------------------------------------------------------------------
+# Job radar (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+async def insert_job_lead(
+    db: aiosqlite.Connection,
+    *,
+    source: str,
+    source_id: str | None,
+    title: str,
+    company: str | None,
+    url: str,
+    location: str | None,
+    remote: bool | None,
+    summary: str,
+    published_at: str | None,
+    fit_score: float,
+    fit_note: str,
+    dream: bool,
+) -> tuple[int, bool]:
+    """Insert a lead unless its url is already known. Returns (id, created)."""
+    cursor = await db.execute(
+        """
+        INSERT INTO job_leads (
+            source, source_id, title, company, url, location, remote, summary,
+            published_at, fit_score, fit_note, dream
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(url) DO NOTHING
+        """,
+        (
+            source,
+            source_id,
+            title,
+            company,
+            url,
+            location,
+            None if remote is None else int(remote),
+            summary,
+            published_at,
+            fit_score,
+            fit_note,
+            int(dream),
+        ),
+    )
+    await db.commit()
+    if cursor.rowcount:
+        assert cursor.lastrowid is not None
+        return cursor.lastrowid, True
+    existing = await db.execute("SELECT id FROM job_leads WHERE url = ?", (url,))
+    row = await existing.fetchone()
+    assert row is not None
+    return int(row[0]), False
+
+
+async def get_job_lead_by_id(
+    db: aiosqlite.Connection, lead_id: int
+) -> aiosqlite.Row | None:
+    cursor = await db.execute("SELECT * FROM job_leads WHERE id = ?", (lead_id,))
+    return await cursor.fetchone()
+
+
+async def list_job_leads(
+    db: aiosqlite.Connection,
+    *,
+    statuses: tuple[str, ...] | None = None,
+    limit: int = 30,
+) -> list[aiosqlite.Row]:
+    if statuses:
+        placeholders = ", ".join("?" for _ in statuses)
+        cursor = await db.execute(
+            f"""
+            SELECT * FROM job_leads
+            WHERE status IN ({placeholders})
+            ORDER BY dream DESC, fit_score DESC, id DESC
+            LIMIT ?
+            """,  # noqa: S608
+            (*statuses, limit),
+        )
+    else:
+        cursor = await db.execute(
+            """
+            SELECT * FROM job_leads
+            ORDER BY dream DESC, fit_score DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+    return list(await cursor.fetchall())
+
+
+async def update_job_lead_status(
+    db: aiosqlite.Connection,
+    *,
+    lead_id: int,
+    status: str,
+    notes: str | None,
+    applied_at: str | None,
+) -> bool:
+    cursor = await db.execute(
+        """
+        UPDATE job_leads
+        SET status = ?,
+            notes = COALESCE(?, notes),
+            applied_at = COALESCE(?, applied_at),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (status, notes, applied_at, lead_id),
+    )
+    await db.commit()
+    return bool(cursor.rowcount)
+
+
+async def count_job_leads_by_status(db: aiosqlite.Connection) -> dict[str, int]:
+    cursor = await db.execute("SELECT status, COUNT(*) FROM job_leads GROUP BY status")
+    rows = await cursor.fetchall()
+    return {str(row[0]): int(row[1]) for row in rows}

@@ -29,6 +29,7 @@ from app.schemas.editorial import (
     RecommendedAction,
 )
 from app.schemas.goals import ActiveGoal
+from app.schemas.jobs import JobLead, JobStatus
 from app.schemas.linkedin import (
     LinkedInPost,
     LinkedInPostRecord,
@@ -39,6 +40,7 @@ from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services.diagnostics import DiagReport
 
 if TYPE_CHECKING:
+    from app.services.job_radar import RadarResult
     from app.services.post_ledger import CadenceStatus, PublishResult
 
 _SOLID_SIGNAL_THRESHOLD = 0.45
@@ -1232,4 +1234,128 @@ def format_reset_done(counts: dict[str, int]) -> str:
     lines.append(
         "El goal sigue activo. Empezamos limpio: <code>weekly</code> cuando quieras."
     )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Job radar and pipeline (Phase 2)
+# ---------------------------------------------------------------------------
+
+_JOB_STATUS_LABELS: dict[JobStatus, str] = {
+    JobStatus.NEW: "nuevas",
+    JobStatus.SAVED: "guardadas",
+    JobStatus.APPLIED: "aplicadas",
+    JobStatus.INTERVIEW: "en entrevista",
+    JobStatus.OFFER: "con oferta",
+    JobStatus.REJECTED: "rechazadas",
+    JobStatus.DISMISSED: "descartadas",
+}
+
+
+def _lead_lines(lead: JobLead, *, with_note: bool = True) -> list[str]:
+    company = f" · {escape_text(lead.company)}" if lead.company else ""
+    flag = "⭐ " if lead.dream else ""
+    remote = " · remoto" if lead.remote else ""
+    lines = [
+        f"• {flag}#{lead.id} · <b>{escape_text(compact_text(lead.title, 110))}</b>"
+        f"{company}{remote} · fit {lead.fit_score:.2f}"
+    ]
+    if with_note and lead.fit_note:
+        lines.append(f"  {escape_text(compact_text(lead.fit_note, 160))}")
+    lines.append(f'  ↗ <a href="{escape_text(lead.url)}">ver vacante</a>')
+    return lines
+
+
+def format_job_radar(result: RadarResult, *, scheduled: bool = False) -> str:
+    title = "<b>Radar de vacantes</b>"
+    if scheduled:
+        title = "<b>Radar de vacantes · semanal</b>"
+    lines = [title]
+    fetched = sum(outcome.fetched for outcome in result.outcomes)
+    failed = [outcome for outcome in result.outcomes if outcome.failed]
+    if result.all_failed:
+        first_error = failed[0].error or "sin detalle"
+        lines.append(
+            "Ninguna búsqueda respondió. "
+            f"Error: <code>{escape_text(first_error)}</code>. "
+            "Revisa <code>diag</code> y la clave de Exa."
+        )
+        return "\n".join(lines)
+    lines.append(
+        f"{len(result.outcomes)} búsquedas · {fetched} resultados · "
+        f"{len(result.new_leads)} nuevas · {result.already_known} ya conocidas · "
+        f"{result.below_fit} descartadas por fit bajo."
+    )
+    if failed:
+        lines.append(f"{len(failed)} búsqueda(s) fallaron; el resto sí respondió.")
+    lines.append("")
+    if not result.new_leads:
+        lines.append(
+            "Nada nuevo que valga la pena esta vez. Si quieres afinar, "
+            "<code>jobs &lt;tema&gt;</code> con un rol concreto."
+        )
+        return "\n".join(lines)
+    for lead in result.new_leads[:6]:
+        lines.extend(_lead_lines(lead))
+    if len(result.new_leads) > 6:
+        lines.append(f"y {len(result.new_leads) - 6} más en <code>pipeline</code>.")
+    lines.append("")
+    lines.append(
+        "Para mover una: <code>aplicado &lt;id&gt;</code>, "
+        "<code>estado &lt;id&gt; guardado|descartado</code>."
+    )
+    return "\n".join(lines)
+
+
+def format_pipeline(grouped: dict[JobStatus, list[JobLead]]) -> str:
+    lines = ["<b>Pipeline de vacantes</b>"]
+    total = sum(len(items) for items in grouped.values())
+    if total == 0:
+        lines.append(
+            "Vacío. Corre <code>jobs</code> para buscar o registra una que "
+            "encontraste por fuera con <code>estado</code> cuando exista."
+        )
+        return "\n".join(lines)
+    order = (
+        JobStatus.OFFER,
+        JobStatus.INTERVIEW,
+        JobStatus.APPLIED,
+        JobStatus.SAVED,
+        JobStatus.NEW,
+    )
+    for status in order:
+        items = grouped.get(status, [])
+        if not items:
+            continue
+        lines.append("")
+        lines.append(f"<b>{_JOB_STATUS_LABELS[status].capitalize()} ({len(items)})</b>")
+        for lead in items[:8]:
+            lines.extend(_lead_lines(lead, with_note=status is JobStatus.NEW))
+        if len(items) > 8:
+            lines.append(f"  y {len(items) - 8} más.")
+    return "\n".join(lines)
+
+
+def format_lead_status_ack(lead: JobLead, counts: dict[str, int]) -> str:
+    label = _JOB_STATUS_LABELS.get(lead.status, lead.status.value)
+    lines = [
+        f"<b>Vacante #{lead.id} → {label}.</b>",
+        f"{escape_text(compact_text(lead.title, 120))}"
+        + (f" · {escape_text(lead.company)}" if lead.company else ""),
+    ]
+    if lead.notes:
+        lines.append(f"Nota: {escape_text(compact_text(lead.notes, 200))}")
+    applied = counts.get(JobStatus.APPLIED.value, 0)
+    interview = counts.get(JobStatus.INTERVIEW.value, 0)
+    offer = counts.get(JobStatus.OFFER.value, 0)
+    lines.append("")
+    lines.append(
+        f"Pipeline: {applied} aplicadas · {interview} en entrevista · "
+        f"{offer} con oferta."
+    )
+    if lead.status is JobStatus.APPLIED:
+        lines.append(
+            "Si quieres, armamos un post esta semana que respalde esa aplicación: "
+            "<code>github_insights</code> o <code>weekly</code>."
+        )
     return "\n".join(lines)

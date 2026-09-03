@@ -48,6 +48,7 @@ from app.schemas.editorial import (
     WeeklyThesisGenerationInput,
 )
 from app.schemas.github import GitHubInsightCandidate
+from app.schemas.jobs import JobStatus
 from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services import (
     active_goals,
@@ -57,6 +58,7 @@ from app.services import (
     editorial_planner,
     github_insight_service,
     handoff_followups,
+    job_radar,
     linkedin_writer,
     mvp_handoff,
     post_ledger,
@@ -172,6 +174,27 @@ _DISMISS_FOLLOWUP_RE = re.compile(
     r"dejalo|déjalo|cancelar|cancela|nada|nope)\s*$",
     re.I,
 )
+_JOBS_RE = re.compile(
+    r"^(?:busca(?:me)?\s+|buscar\s+)?"
+    r"(?:vacantes|trabajos|ofertas(?:\s+de\s+trabajo)?|empleos|jobs)"
+    r"(?:\s+(?:de|sobre|para|en)\s+(?P<query>.+?))?\s*[?¿!]*\s*$",
+    re.I,
+)
+_APPLIED_RE = re.compile(
+    r"^(?:ya\s+)?apliqu[eé]\s+(?:a\s+(?:la\s+)?)?(?:vacante\s+|lead\s+)?"
+    r"#?(?P<id>\d+)(?P<rest>.*)$",
+    re.I,
+)
+_PIPELINE_RE = re.compile(
+    r"^(?:pipeline|mis\s+aplicaciones|aplicaciones|"
+    r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)\s*[?¿!]*\s*$",
+    re.I,
+)
+_LEAD_STATUS_RE = re.compile(
+    r"^(?:estado|marca)\s+(?:vacante\s+|lead\s+)?#?(?P<id>\d+)\s+"
+    r"(?P<status>\w+)(?P<rest>.*)$",
+    re.I,
+)
 _PUBLISHED_RE = re.compile(
     r"^(?:ya\s+)?(?:lo\s+|la\s+)?"
     r"(?:publiqu[eé]|public[oó]|poste[eé]|publicado|posteado|"
@@ -245,6 +268,13 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "publique": CommandName.PUBLISHED,
     "posts": CommandName.POSTS,
     "reset_editorial": CommandName.RESET_EDITORIAL,
+    "jobs": CommandName.JOBS,
+    "vacantes": CommandName.JOBS,
+    "aplicado": CommandName.APPLIED,
+    "aplique": CommandName.APPLIED,
+    "apliqué": CommandName.APPLIED,
+    "estado": CommandName.LEAD_STATUS,
+    "pipeline": CommandName.PIPELINE,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -523,6 +553,18 @@ def _parse_published_args(query: str) -> tuple[str | None, int | None]:
     return url, post_id
 
 
+def _parse_lead_args(query: str) -> tuple[int | None, str | None]:
+    """Split "aplicado 3 nota libre" into (lead_id, note)."""
+    tokens = query.split(maxsplit=1)
+    if not tokens:
+        return None, None
+    head = tokens[0].strip("#<>()[],")
+    if not head.isdigit():
+        return None, None
+    note = tokens[1].strip() if len(tokens) > 1 else None
+    return int(head), note or None
+
+
 def _set_pending(
     chat_id: int | None,
     *,
@@ -757,6 +799,38 @@ def _natural_command(
                 query=None,
                 raw_text=text,
             )
+    jobs_match = _JOBS_RE.match(stripped)
+    if jobs_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.JOBS,
+            query=(jobs_match.group("query") or "").strip() or None,
+            raw_text=text,
+        )
+    applied_match = _APPLIED_RE.match(stripped)
+    if applied_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.APPLIED,
+            query=f"{applied_match.group('id')} {applied_match.group('rest')}".strip(),
+            raw_text=text,
+        )
+    if _PIPELINE_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.PIPELINE,
+            query=None,
+            raw_text=text,
+        )
+    status_match = _LEAD_STATUS_RE.match(stripped)
+    if status_match is not None and job_radar.parse_status_word(
+        status_match.group("status")
+    ):
+        return ParsedTelegramCommand(
+            name=CommandName.LEAD_STATUS,
+            query=(
+                f"{status_match.group('id')} {status_match.group('status')} "
+                f"{status_match.group('rest')}"
+            ).strip(),
+            raw_text=text,
+        )
     published_match = _PUBLISHED_RE.match(stripped)
     if published_match is not None:
         return ParsedTelegramCommand(
@@ -1774,6 +1848,54 @@ async def handle_command(
             deadline_at=deadline,
         )
         return telegram_formatting.format_goal_set(new_goal)
+
+    if command.name == CommandName.JOBS:
+        radar = await job_radar.run_radar(db, query=command.query or None)
+        return telegram_formatting.format_job_radar(radar)
+
+    if command.name == CommandName.APPLIED:
+        lead_id, note = _parse_lead_args(command.query or "")
+        if lead_id is None:
+            return (
+                "<b>Uso:</b> <code>aplicado &lt;id&gt; [nota]</code>. "
+                "Los ids salen en <code>jobs</code> o <code>pipeline</code>."
+            )
+        try:
+            lead = await job_radar.mark_status(
+                db, lead_id=lead_id, status=JobStatus.APPLIED, note=note
+            )
+        except LookupError:
+            return _not_found("Vacante", lead_id)
+        counts = await job_radar.status_counts(db)
+        return telegram_formatting.format_lead_status_ack(lead, counts)
+
+    if command.name == CommandName.LEAD_STATUS:
+        tokens = (command.query or "").split(maxsplit=2)
+        if len(tokens) < 2 or not tokens[0].lstrip("#").isdigit():
+            return (
+                "<b>Uso:</b> <code>estado &lt;id&gt; "
+                "entrevista|oferta|rechazado|guardado|descartado [nota]</code>"
+            )
+        target_status = job_radar.parse_status_word(tokens[1])
+        if target_status is None:
+            return (
+                "No reconozco ese estado. Usa entrevista, oferta, rechazado, "
+                "guardado, descartado o aplicado."
+            )
+        lead_id = int(tokens[0].lstrip("#"))
+        note = tokens[2] if len(tokens) > 2 else None
+        try:
+            lead = await job_radar.mark_status(
+                db, lead_id=lead_id, status=target_status, note=note
+            )
+        except LookupError:
+            return _not_found("Vacante", lead_id)
+        counts = await job_radar.status_counts(db)
+        return telegram_formatting.format_lead_status_ack(lead, counts)
+
+    if command.name == CommandName.PIPELINE:
+        grouped = await job_radar.pipeline(db)
+        return telegram_formatting.format_pipeline(grouped)
 
     if command.name == CommandName.PUBLISHED:
         url, explicit_id = _parse_published_args(command.query or "")

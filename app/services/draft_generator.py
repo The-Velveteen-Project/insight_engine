@@ -100,8 +100,7 @@ def _fallback_content(plan: PersistedEditorialPlan) -> EditorialDraftContent:
         f"Portfolio value: {proposal.portfolio_value}"
     )
     short_version = (
-        f"{proposal.angle}. {proposal.why_it_matters} "
-        f"{proposal.draft_outline.closing}"
+        f"{proposal.angle}. {proposal.why_it_matters} {proposal.draft_outline.closing}"
     )
     cta = "Worth developing further only if the next iteration stays specific."
     tone_notes = [
@@ -186,12 +185,12 @@ async def discard_persisted_editorial_draft(
     draft_id: int,
 ) -> PersistedEditorialDraft:
     current = await get_persisted_editorial_draft(db, draft_id)
-    if EditorialDraftStatus.DISCARDED not in _ALLOWED_DRAFT_STATUS_TRANSITIONS[
-        current.status
-    ]:
+    if (
+        EditorialDraftStatus.DISCARDED
+        not in _ALLOWED_DRAFT_STATUS_TRANSITIONS[current.status]
+    ):
         raise EditorialDraftTransitionError(
-            "Invalid editorial draft transition: "
-            f"{current.status.value} -> discarded."
+            f"Invalid editorial draft transition: {current.status.value} -> discarded."
         )
     await update_editorial_draft_status(db, draft_id, EditorialDraftStatus.DISCARDED)
     return await get_persisted_editorial_draft(db, draft_id)

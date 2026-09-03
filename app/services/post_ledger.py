@@ -121,8 +121,9 @@ async def record_generated(
     post: LinkedInPost,
     llm_used: bool,
     opinion_used: bool,
-    language: str = "es",
+    language: str | None = None,
 ) -> int:
+    language = (language or settings.linkedin_language or "en").strip().lower()
     goal = await active_goals.get_current(db)
     post_id = await insert_linkedin_post(
         db,

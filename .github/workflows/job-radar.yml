@@ -1,0 +1,23 @@
+name: Job Radar
+
+on:
+  schedule:
+    # Mondays at 12:00 UTC (07:00 in Colombia). Sends a message only when new
+    # vacancies match the profile, or when every search failed.
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+jobs:
+  job-radar:
+    name: Weekly Job Radar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger job radar
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/run-job-radar" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 170
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}

@@ -177,9 +177,7 @@ async def test_dismiss_latest_for_chat_marks_dismissed(
     db: aiosqlite.Connection,
 ) -> None:
     chat_id = 910002
-    await handoff_followups.schedule_after_postpone(
-        db, plan_id=42, chat_id=chat_id
-    )
+    await handoff_followups.schedule_after_postpone(db, plan_id=42, chat_id=chat_id)
     dismissed = await handoff_followups.dismiss_latest_for_chat(db, chat_id)
     assert dismissed is True
 

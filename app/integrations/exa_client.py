@@ -107,17 +107,32 @@ def _parse_results(raw_results: list[ExaResultDict]) -> list[SignalCandidate]:
     return candidates
 
 
-async def fetch(query: str, *, max_results: int = 10) -> list[SignalCandidate]:
-    """
-    Query Exa's neural search and return parsed SignalCandidates (unscored).
+async def search(
+    query: str,
+    *,
+    num_results: int = 10,
+    include_domains: list[str] | None = None,
+    start_published_date: str | None = None,
+) -> list[ExaResultDict]:
+    """Raw Exa neural search. Shared by discovery and the job radar.
 
-    Raises RuntimeError when EXA_API_KEY is not configured — discovery_service's
-    _safe_fetch will catch it and surface a 'failed' outcome in the weekly's
-    transparency footer instead of silently returning zero candidates.
+    Raises RuntimeError when EXA_API_KEY is not configured so callers can
+    report a failed source instead of silently returning nothing.
     """
     api_key = settings.exa_api_key.strip()
     if not api_key:
         raise RuntimeError("EXA_API_KEY no configurada")
+
+    body: dict[str, object] = {
+        "query": query,
+        "type": "neural",
+        "numResults": num_results,
+        "contents": {"highlights": {"max_characters": 4000}},
+    }
+    if include_domains:
+        body["includeDomains"] = include_domains
+    if start_published_date:
+        body["startPublishedDate"] = start_published_date
 
     transport = httpx.AsyncHTTPTransport(retries=2)
     async with httpx.AsyncClient(
@@ -125,19 +140,7 @@ async def fetch(query: str, *, max_results: int = 10) -> list[SignalCandidate]:
         timeout=_TIMEOUT,
         transport=transport,
     ) as client:
-        response = await client.post(
-            _BASE_URL,
-            json={
-                "query": query,
-                "type": "neural",
-                "numResults": max_results,
-                "contents": {
-                    "highlights": {
-                        "max_characters": 4000,
-                    },
-                },
-            },
-        )
+        response = await client.post(_BASE_URL, json=body)
         response.raise_for_status()
 
     payload = response.json()
@@ -148,9 +151,18 @@ async def fetch(query: str, *, max_results: int = 10) -> list[SignalCandidate]:
     if not isinstance(raw_results, list):
         raise RuntimeError("Unexpected Exa API payload: expected 'results' list.")
 
-    typed_results = [
-        cast(ExaResultDict, item) for item in raw_results if isinstance(item, dict)
-    ]
+    return [cast(ExaResultDict, item) for item in raw_results if isinstance(item, dict)]
+
+
+async def fetch(query: str, *, max_results: int = 10) -> list[SignalCandidate]:
+    """
+    Query Exa's neural search and return parsed SignalCandidates (unscored).
+
+    Raises RuntimeError when EXA_API_KEY is not configured — discovery_service's
+    _safe_fetch will catch it and surface a 'failed' outcome in the weekly's
+    transparency footer instead of silently returning zero candidates.
+    """
+    typed_results = await search(query, num_results=max_results)
     candidates = _parse_results(typed_results)
     logger.info(
         "Exa query=%r returned %d results, parsed %d candidates.",

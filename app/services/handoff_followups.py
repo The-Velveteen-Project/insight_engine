@@ -98,9 +98,7 @@ async def _build_repo_candidates(
             metadata = await fetch_repo_metadata(full_name)
             commits = await fetch_recent_commits(full_name, per_page=5)
         except Exception as exc:
-            logger.warning(
-                "Skipping repo %s in handoff match: %s", full_name, exc
-            )
+            logger.warning("Skipping repo %s in handoff match: %s", full_name, exc)
             continue
         candidates.append(
             HandoffRepoCandidate(

@@ -351,6 +351,22 @@ of what actually went live.
 - `/diag` reports commit, model, host, key presence and whether the LLM
   answers, without echoing any key
 
+## Job Radar And Application Pipeline
+
+The active goal is a job, so the operator also watches the market.
+
+- `jobs [topic]` searches job boards through Exa (`JOB_RADAR_QUERIES`,
+  `JOB_RADAR_DOMAINS`, freshness `JOB_RADAR_DAYS`) and persists new leads in
+  `job_leads`; leads already known are counted, not repeated
+- fit is deterministic keyword scoring with a readable note; companies in
+  `JOB_TARGET_COMPANIES` are flagged with ⭐ and sorted first
+- `aplicado <id> [nota]`, `estado <id> entrevista|oferta|rechazado|guardado|
+  descartado [nota]` and `pipeline` move and show the application pipeline
+- a weekly radar runs Mondays and sends a message only when there is
+  something new or every search failed
+- generated LinkedIn posts default to English (`LINKEDIN_LANGUAGE`), with
+  Carlos's own published posts as voice exemplars in the writer prompt
+
 ## Main Working Loops
 
 ### Editorial loop

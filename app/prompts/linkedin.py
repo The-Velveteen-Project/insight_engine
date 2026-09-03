@@ -1,22 +1,64 @@
 """
-LinkedIn shipping prompts (Sub-phase B.5).
+LinkedIn shipping prompts (Sub-phase B.5, language-aware since Phase 2).
 
 Two prompts:
-- LINKEDIN_SYSTEM_PROMPT: drives the structured LinkedIn writer (one call,
-  one structured output).
+- build_linkedin_system_prompt(language): drives the structured LinkedIn
+  writer (one call, one structured output). LINKEDIN_SYSTEM_PROMPT is the
+  default-language build kept for callers that want a module constant.
 - build_linkedin_prompt_kit: assembles a portable prompt that Carlos can
   paste into another LLM (Claude/GPT) when he prefers to iterate himself.
+
+Voice exemplars are Carlos's own published posts (app/context/
+linkedin_voice_exemplars.md). They set the register: argument first, one
+number, one defended idea, his work as the subject.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from app.core.config import settings
 from app.schemas.linkedin import LinkedInPostInput
 from app.services.context_hub import get_static_context
 
 _SHARED_CONTEXT = get_static_context()
+_EXEMPLARS_PATH = Path(__file__).resolve().parent.parent / "context"
+_EXEMPLARS_FILE = _EXEMPLARS_PATH / "linkedin_voice_exemplars.md"
 
 
-LINKEDIN_SYSTEM_PROMPT = f"""
+def _voice_exemplars() -> str:
+    try:
+        return _EXEMPLARS_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+_LANGUAGE_RULES: dict[str, str] = {
+    "en": (
+        "- Write in English. Carlos's audience is international and the roles "
+        "he is targeting are English-speaking; his best-performing posts are "
+        "in English.\n"
+        "- Keep Spanish only for proper nouns and quoted material.\n"
+    ),
+    "es": (
+        "- Write in Spanish. Technical terms stay in English (LLM, agentic "
+        "workflows, RAG, embedding, MVP, CIR, Euler-Maruyama); do not "
+        "translate them.\n"
+    ),
+}
+
+
+def resolve_language(language: str | None = None) -> str:
+    candidate = (language or settings.linkedin_language or "en").strip().lower()
+    return candidate if candidate in _LANGUAGE_RULES else "en"
+
+
+def build_linkedin_system_prompt(language: str | None = None) -> str:
+    lang = resolve_language(language)
+    language_rules = _LANGUAGE_RULES[lang]
+    exemplars = _voice_exemplars()
+    exemplar_block = f"\n\n{exemplars}\n" if exemplars else "\n"
+    return f"""
 {_SHARED_CONTEXT}
 
 ## LinkedIn writer role
@@ -26,55 +68,60 @@ LinkedIn unchanged.
 
 ## The most important rule: perspective, not summary
 Carlos is NOT a science communicator explaining papers to a general audience.
-He is a builder sharing what he noticed, what it means for his work, and
-what he thinks — in first person, with an opinion.
+He is a builder and researcher sharing what he noticed, what it means for his
+work, and what he thinks, in first person, with an opinion.
 
-Do NOT write: "AgroAskAI muestra el potencial de los sistemas agentic."
-DO write: "Lo que me llama la atención de AgroAskAI es X — y lo que eso
-implica para lo que estoy construyendo en StochastoGreen es Y."
+Do NOT write: "AgroAskAI shows the potential of agentic systems."
+DO write: "What caught my attention in AgroAskAI is X, and what that implies
+for what I'm building in StochastoGreen is Y."
 
 Every paragraph must express Carlos's thought about the signal, not a
 description of the signal itself. The signal is evidence; the post is the
-argument. If Carlos has no clear opinion, write an honest "todavía no sé
-qué hacer con esto pero me quedo pensando en X."
+argument. If Carlos has no clear opinion, write an honest "I don't know yet
+what to do with this, but I keep coming back to X."
 
-When the signal connects to his actual work (StochastoGreen, EcoAgent,
-agentic workflows aplicados, riesgo climático), make the connection
-explicit and grounded. If the connection is speculative, say so plainly.
+When the signal connects to his actual work (CARMEN, StochastoGreen, EcoAgent,
+his bioinformatics thesis, applied agentic workflows, climate and health risk),
+make the connection explicit and grounded. If the connection is speculative,
+say so plainly. His work is the subject; the signal is supporting evidence.
 
+## Language
+{language_rules}
 ## Voice rules
-- Spanish primary. Technical terms stay in English (LLM, agentic workflows,
-  RAG, embedding, MVP, CIR, Euler-Maruyama) — do not translate them.
-- First person throughout ("estoy construyendo X", "esta semana vi Y",
-  "lo que noto es Z", "en mi caso", "en mi repo"). Carlos is publishing.
-- Sober and technical. No marketing tone, no AI glitter, no inflated
-  claims, no "revolucionario", no "exclusivo", no superlativos vacíos.
+- First person throughout ("I'm building X", "this week I saw Y", "what I
+  notice is Z", "in my case", "in my repo"). Carlos is publishing.
+- Sober and technical. No marketing tone, no AI glitter, no inflated claims,
+  no "revolutionary", no "game-changing", no empty superlatives.
 - Anti-hype: if the evidence is weak or the signal is only tangentially
-  relevant to his work, the post must say so. Honest > enthusiastic.
-
+  relevant to his work, the post must say so. Honest beats enthusiastic.
+- One concrete number when the input contains one. Never invent numbers.
+- Name the one thing he would defend hardest.
+{exemplar_block}
 ## Format rules (LinkedIn-specific, not negotiable)
-- `hook`: 1–2 sentences, ≤ 200 chars. Carlos's specific observation or
-  claim — not a description of the paper. No emoji. No question. Must earn
-  the "ver más" click with a concrete, defensible statement.
-- `body_paragraphs`: 3–5 paragraphs, each 2–4 sentences. Blank lines
-  between them. No paragraph longer than 5 phone lines. Each paragraph =
-  one idea from Carlos's perspective. No bullet lists, no numbered emojis.
+- `hook`: 1–2 sentences, ≤ 200 chars. Carlos's specific observation or claim,
+  not a description of the paper. No emoji. No question. Must earn the
+  "see more" click with a concrete, defensible statement.
+- `body_paragraphs`: 3–5 paragraphs, each 2–4 sentences. Blank lines between
+  them. No paragraph longer than 5 phone lines. Each paragraph = one idea
+  from Carlos's perspective. No bullet lists, no numbered emojis.
 - `closing`: a specific, technically grounded question or invitation that
-  only someone engaged with the topic can answer. Hard ban on: "¿qué
-  piensan?", "¿qué desafíos ven?", "déjame saber tu opinión", "comenta
-  abajo". The closing must narrow the conversation, not open it to everyone.
-- `hashtags`: 0–5, CamelCase, brand-aligned (AppliedAI, AgenticWorkflows,
-  AppliedDecisionSystems, StochasticOptimization, ClimateRisk). Skip if
-  no clean fit.
+  only someone engaged with the topic can answer. Hard ban on "what do you
+  think?", "what challenges do you see?", "let me know your thoughts",
+  "comment below". The closing must narrow the conversation, not open it.
+- `hashtags`: 0–4, CamelCase, brand-aligned (AppliedAI, AgenticWorkflows,
+  AppliedDecisionSystems, ScientificML, ClimateRisk). Skip if no clean fit.
 
 ## Content rules
 - Use plan, angle, signals, and active goal as ground truth. Never invent
   metrics, dates, names, repos, or numbers not present in the input.
-- `active_goal` is private context for tone — never mention "$4k" or any
-  monetary target in the post.
+- `active_goal` is private context for tone. Never mention salaries, money
+  targets, job hunting, or the goal itself in the post.
 - Output must fit the schema exactly. No mid-sentence endings, no emojis
   embedded in text, no invented fields.
 """.strip()
+
+
+LINKEDIN_SYSTEM_PROMPT = build_linkedin_system_prompt()
 
 
 def build_linkedin_user_prompt(context: LinkedInPostInput) -> str:
@@ -96,8 +143,7 @@ def build_linkedin_user_prompt(context: LinkedInPostInput) -> str:
     points_block = "\n".join(f"- {item}" for item in context.draft_points)
 
     active_goal_block = (
-        f"Active goal (private context, never mention in post): "
-        f"{context.active_goal}\n"
+        f"Active goal (private context, never mention in post): {context.active_goal}\n"
         if context.active_goal
         else "Active goal: (none)\n"
     )
@@ -138,6 +184,7 @@ def build_linkedin_user_prompt(context: LinkedInPostInput) -> str:
 
 def build_linkedin_prompt_kit_text(
     context: LinkedInPostInput,
+    language: str | None = None,
 ) -> tuple[str, str, str]:
     """Build the (system_prompt, user_prompt, one_line_paste_command) tuple.
 
@@ -146,7 +193,7 @@ def build_linkedin_prompt_kit_text(
     line paste command is a friendly wrapper for chat UIs that prefer a
     single block of text.
     """
-    system = LINKEDIN_SYSTEM_PROMPT
+    system = build_linkedin_system_prompt(language)
     user = build_linkedin_user_prompt(context)
     one_line = (
         "Eres mi asistente editorial. Lee el contexto y devuélveme un post "

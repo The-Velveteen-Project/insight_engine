@@ -71,6 +71,30 @@ class Settings(BaseSettings):
     weekly_summary_cron: str = "0 9 * * 0"
     weekly_mvp_scan_cron: str = "0 9 * * 4"
 
+    # Default language for generated LinkedIn posts ("en" or "es"). Carlos's
+    # strongest posts and target roles are English, so English is the default.
+    linkedin_language: str = "en"
+
+    # Phase 2 job radar: Exa queries (semicolon-separated), job-board domains,
+    # dream companies, freshness window and the minimum fit to surface a lead.
+    job_radar_queries: str = (
+        "research engineer scientific machine learning remote;"
+        "applied scientist stochastic modeling forecasting;"
+        "machine learning engineer bioinformatics foundation models;"
+        "AI research engineer LLM agents remote Latin America"
+    )
+    job_radar_domains: str = (
+        "jobs.lever.co,boards.greenhouse.io,job-boards.greenhouse.io,"
+        "jobs.ashbyhq.com,wellfound.com,remoteok.com,weworkremotely.com,"
+        "linkedin.com,ycombinator.com,apply.workable.com,jobs.smartrecruiters.com"
+    )
+    job_target_companies: str = (
+        "Anthropic,OpenAI,Google DeepMind,Mistral,Cohere,Hugging Face,"
+        "Allen Institute,Isomorphic Labs,Recursion,Arc Institute,Chan Zuckerberg"
+    )
+    job_radar_days: int = 21
+    job_min_fit: float = 0.3
+
     # Phase 1 cadence: how many published posts per week the operator expects,
     # and how long it waits before nagging again.
     post_cadence_per_week: int = 2
@@ -96,6 +120,22 @@ class Settings(BaseSettings):
             source.strip().lower()
             for source in self.discovery_enabled_sources.split(",")
             if source.strip()
+        )
+
+    @property
+    def job_radar_query_list(self) -> tuple[str, ...]:
+        return tuple(q.strip() for q in self.job_radar_queries.split(";") if q.strip())
+
+    @property
+    def job_radar_domain_list(self) -> tuple[str, ...]:
+        return tuple(
+            d.strip().lower() for d in self.job_radar_domains.split(",") if d.strip()
+        )
+
+    @property
+    def job_target_company_list(self) -> tuple[str, ...]:
+        return tuple(
+            c.strip() for c in self.job_target_companies.split(",") if c.strip()
         )
 
     @property

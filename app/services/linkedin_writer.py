@@ -21,8 +21,8 @@ from app.core.config import settings
 from app.db.queries import get_signals_by_ids
 from app.integrations.openai_compat import build_async_openai_client
 from app.prompts.linkedin import (
-    LINKEDIN_SYSTEM_PROMPT,
     build_linkedin_prompt_kit_text,
+    build_linkedin_system_prompt,
     build_linkedin_user_prompt,
 )
 from app.schemas.editorial import EditorialSignalContext
@@ -170,7 +170,7 @@ class OpenAILinkedInWriter:
         return await _structured_completion(
             self._client,
             model=self._model,
-            system=LINKEDIN_SYSTEM_PROMPT,
+            system=build_linkedin_system_prompt(),
             user=build_linkedin_user_prompt(context),
             response_cls=LinkedInPost,
             max_tokens=900,

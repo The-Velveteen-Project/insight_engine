@@ -17,6 +17,7 @@ from app.core.config import settings
 from app.services.handoff_followups import process_due_followups
 from app.services.scheduler import (
     run_cadence_reminder_job,
+    run_job_radar_job,
     run_weekly_mvp_scan_job,
     run_weekly_summary_job,
 )
@@ -69,6 +70,15 @@ async def run_cadence_check(
     _require_internal_token(x_internal_token)
     await run_cadence_reminder_job()
     return InternalJobResponse(status="ok", job="cadence_check")
+
+
+@router.post("/run-job-radar", response_model=InternalJobResponse)
+async def run_job_radar(
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> InternalJobResponse:
+    _require_internal_token(x_internal_token)
+    await run_job_radar_job()
+    return InternalJobResponse(status="ok", job="job_radar")
 
 
 @router.post("/process-handoff-followups", response_model=InternalJobResponse)

@@ -171,6 +171,34 @@ CREATE TABLE IF NOT EXISTS linkedin_posts (
 )
 """
 
+# Phase 2 (career manager): vacancies found by the job radar plus the
+# application pipeline Carlos moves by hand. Not part of the editorial
+# reset: this is his career state, not the week's editorial work.
+_CREATE_JOB_LEADS = """
+CREATE TABLE IF NOT EXISTS job_leads (
+    id           INTEGER   PRIMARY KEY AUTOINCREMENT,
+    source       TEXT      NOT NULL,
+    source_id    TEXT,
+    title        TEXT      NOT NULL,
+    company      TEXT,
+    url          TEXT      NOT NULL UNIQUE,
+    location     TEXT,
+    remote       INTEGER,
+    summary      TEXT,
+    published_at TIMESTAMP,
+    fit_score    REAL      NOT NULL DEFAULT 0,
+    fit_note     TEXT,
+    dream        INTEGER   NOT NULL DEFAULT 0,
+    status       TEXT      NOT NULL DEFAULT 'new'
+                           CHECK (status IN ('new', 'saved', 'applied', 'interview',
+                                             'offer', 'rejected', 'dismissed')),
+    notes        TEXT,
+    found_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    applied_at   TIMESTAMP,
+    updated_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 # Small key/value store for operator bookkeeping (last cadence reminder, etc.).
 _CREATE_OPERATOR_STATE = """
 CREATE TABLE IF NOT EXISTS operator_state (
@@ -223,6 +251,8 @@ _CREATE_INDEXES = [
     " ON linkedin_posts(status, published_at)",
     "CREATE INDEX IF NOT EXISTS idx_linkedin_posts_chat_created"
     " ON linkedin_posts(chat_id, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_job_leads_status_fit"
+    " ON job_leads(status, fit_score)",
 ]
 
 
@@ -250,6 +280,7 @@ async def init_db() -> None:
         await db.execute(_CREATE_ACTIVE_GOALS)
         await db.execute(_CREATE_HANDOFF_FOLLOWUPS)
         await db.execute(_CREATE_LINKEDIN_POSTS)
+        await db.execute(_CREATE_JOB_LEADS)
         await db.execute(_CREATE_OPERATOR_STATE)
         for stmt in _CREATE_INDEXES:
             await db.execute(stmt)

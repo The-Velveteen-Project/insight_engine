@@ -1,0 +1,442 @@
+"""
+Job radar (Phase 2 of the career manager).
+
+Searches job boards through Exa for roles that match the active goal,
+scores each lead deterministically against Carlos's profile, persists the
+new ones, and keeps a small application pipeline he moves by hand.
+
+Design choices:
+- Fit is keyword scoring with a readable note, not an LLM judgment. The
+  score decides ordering; Carlos decides applications.
+- Dream companies (Anthropic and peers) are flagged and sorted first even
+  when the fit score is modest, because the goal names them explicitly.
+- Every run reports what it tried: how many results came back, how many
+  were already known, and whether the source failed.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from urllib.parse import urlsplit
+
+import aiosqlite
+
+from app.core.config import settings
+from app.db.queries import (
+    count_job_leads_by_status,
+    get_job_lead_by_id,
+    insert_job_lead,
+    list_job_leads,
+    update_job_lead_status,
+)
+from app.integrations import exa_client
+from app.schemas.jobs import ACTIVE_STATUSES, JobLead, JobLeadCandidate, JobStatus
+from app.services.post_ledger import parse_stamp, stamp
+from app.utils.text import trim_to_boundary
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Fit scoring tables (profile: research engineer / scientific ML / applied math)
+# ---------------------------------------------------------------------------
+
+_ROLE_TERMS: dict[str, float] = {
+    "research engineer": 0.35,
+    "research scientist": 0.35,
+    "applied scientist": 0.3,
+    "scientific machine learning": 0.35,
+    "scientific ml": 0.35,
+    "machine learning engineer": 0.25,
+    "ml engineer": 0.25,
+    "ai engineer": 0.2,
+    "ml researcher": 0.3,
+    "ai researcher": 0.3,
+    "computational biologist": 0.25,
+    "data scientist": 0.12,
+    "quantitative": 0.15,
+}
+_DOMAIN_TERMS: tuple[str, ...] = (
+    "stochastic",
+    "forecasting",
+    "time series",
+    "bioinformatics",
+    "computational biology",
+    "genomics",
+    "protein",
+    "foundation model",
+    "large language model",
+    "llm",
+    "agent",
+    "climate",
+    "risk",
+    "bayesian",
+    "applied mathematics",
+    "simulation",
+    "differential equation",
+    "pytorch",
+    "jax",
+    "scientific computing",
+    "healthcare",
+)
+_LOCATION_TERMS: tuple[str, ...] = (
+    "remote",
+    "worldwide",
+    "anywhere",
+    "latam",
+    "latin america",
+    "colombia",
+    "americas",
+)
+_PENALTY_TERMS: tuple[str, ...] = (
+    "staff ",
+    "principal",
+    "director",
+    "head of",
+    "vp ",
+    "vice president",
+    "10+ years",
+    "12+ years",
+    "15+ years",
+    "intern ",
+    "internship",
+)
+_NOISE_TERMS: tuple[str, ...] = (
+    "sales",
+    "account executive",
+    "marketing manager",
+    "recruiter",
+    "customer success",
+)
+
+_ROLE_CAP = 0.5
+_DOMAIN_STEP = 0.08
+_DOMAIN_CAP = 0.3
+_LOCATION_BONUS = 0.12
+_DREAM_BONUS = 0.15
+_PENALTY = 0.2
+_NOISE_PENALTY = 0.5
+
+_BOARD_COMPANY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("boards.greenhouse.io", re.compile(r"^/([^/?#]+)")),
+    ("job-boards.greenhouse.io", re.compile(r"^/([^/?#]+)")),
+    ("jobs.lever.co", re.compile(r"^/([^/?#]+)")),
+    ("jobs.ashbyhq.com", re.compile(r"^/([^/?#]+)")),
+    ("apply.workable.com", re.compile(r"^/([^/?#]+)")),
+    ("jobs.smartrecruiters.com", re.compile(r"^/([^/?#]+)")),
+)
+_TITLE_COMPANY_RE = re.compile(
+    r"^(?P<title>.+?)\s+(?:at|@|-|–|\|)\s+(?P<company>[^|\-–]+?)\s*$"
+)
+
+
+@dataclass
+class RadarOutcome:
+    query: str
+    fetched: int = 0
+    failed: bool = False
+    error: str | None = None
+
+
+@dataclass
+class RadarResult:
+    new_leads: list[JobLead] = field(default_factory=list)
+    already_known: int = 0
+    below_fit: int = 0
+    outcomes: list[RadarOutcome] = field(default_factory=list)
+
+    @property
+    def all_failed(self) -> bool:
+        return bool(self.outcomes) and all(o.failed for o in self.outcomes)
+
+
+def _row_to_lead(row: aiosqlite.Row) -> JobLead:
+    remote_raw = row["remote"]
+    return JobLead(
+        id=int(row["id"]),
+        source=str(row["source"]),
+        source_id=str(row["source_id"]) if row["source_id"] is not None else None,
+        title=str(row["title"]),
+        company=str(row["company"]) if row["company"] is not None else None,
+        url=str(row["url"]),
+        location=str(row["location"]) if row["location"] is not None else None,
+        remote=None if remote_raw is None else bool(remote_raw),
+        summary=str(row["summary"] or ""),
+        published_at=parse_stamp(row["published_at"]),
+        fit_score=float(row["fit_score"] or 0.0),
+        fit_note=str(row["fit_note"] or ""),
+        dream=bool(row["dream"]),
+        status=JobStatus(str(row["status"])),
+        notes=str(row["notes"]) if row["notes"] is not None else None,
+        found_at=parse_stamp(row["found_at"]) or datetime.now(UTC),
+        applied_at=parse_stamp(row["applied_at"]),
+        updated_at=parse_stamp(row["updated_at"]),
+    )
+
+
+def company_from_url(url: str) -> str | None:
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    for board_host, pattern in _BOARD_COMPANY_PATTERNS:
+        if host == board_host:
+            match = pattern.match(parts.path)
+            if match:
+                slug = match.group(1)
+                return slug.replace("-", " ").replace("_", " ").strip().title()
+    return None
+
+
+def split_title_company(title: str) -> tuple[str, str | None]:
+    match = _TITLE_COMPANY_RE.match(title.strip())
+    if match is None:
+        return title.strip(), None
+    company = match.group("company").strip()
+    if len(company) > 60 or len(company) < 2:
+        return title.strip(), None
+    return match.group("title").strip(), company
+
+
+def is_dream_company(company: str | None) -> bool:
+    if not company:
+        return False
+    lowered = company.lower()
+    return any(target.lower() in lowered for target in settings.job_target_company_list)
+
+
+def score_fit(
+    *, title: str, summary: str, company: str | None
+) -> tuple[float, str, bool]:
+    """Deterministic fit in [0, 1] plus a note naming what matched."""
+    corpus = f"{title} {title} {summary}".lower()
+    notes: list[str] = []
+
+    role_score = 0.0
+    role_hits: list[str] = []
+    for term, weight in _ROLE_TERMS.items():
+        if term in corpus:
+            role_score += weight
+            role_hits.append(term)
+    role_score = min(role_score, _ROLE_CAP)
+    if role_hits:
+        notes.append("rol: " + ", ".join(role_hits[:3]))
+
+    domain_hits = [term for term in _DOMAIN_TERMS if term in corpus]
+    domain_score = min(len(domain_hits) * _DOMAIN_STEP, _DOMAIN_CAP)
+    if domain_hits:
+        notes.append("dominio: " + ", ".join(domain_hits[:4]))
+
+    location_hit = any(term in corpus for term in _LOCATION_TERMS)
+    location_score = _LOCATION_BONUS if location_hit else 0.0
+    if location_hit:
+        notes.append("remoto o LATAM")
+
+    dream = is_dream_company(company)
+    dream_score = _DREAM_BONUS if dream else 0.0
+    if dream:
+        notes.append(f"empresa objetivo: {company}")
+
+    penalty = 0.0
+    penalty_hits = [term.strip() for term in _PENALTY_TERMS if term in corpus]
+    if penalty_hits:
+        penalty += _PENALTY
+        notes.append("seniority fuera de rango: " + ", ".join(penalty_hits[:2]))
+    noise_hits = [term for term in _NOISE_TERMS if term in corpus]
+    if noise_hits:
+        penalty += _NOISE_PENALTY
+        notes.append("no es un rol técnico")
+
+    total = role_score + domain_score + location_score + dream_score - penalty
+    total = max(0.0, min(total, 1.0))
+    return round(total, 3), " · ".join(notes) or "sin coincidencias claras", dream
+
+
+def candidate_from_exa(result: exa_client.ExaResultDict) -> JobLeadCandidate | None:
+    raw_title = (result.get("title") or "").strip()
+    url = (result.get("url") or "").strip()
+    if not raw_title or not url:
+        return None
+    title, company_from_title = split_title_company(raw_title)
+    company = company_from_url(url) or company_from_title
+    highlights = result.get("highlights") or []
+    summary = trim_to_boundary(" ".join(h for h in highlights if h), 600)
+    corpus = f"{raw_title} {summary}".lower()
+    remote = True if "remote" in corpus else None
+    fit, note, dream = score_fit(title=title, summary=summary, company=company)
+    published_raw = result.get("publishedDate")
+    published_at = None
+    if published_raw:
+        try:
+            published_at = datetime.fromisoformat(
+                str(published_raw).replace("Z", "+00:00")
+            )
+        except ValueError:
+            published_at = None
+    return JobLeadCandidate(
+        source="exa",
+        source_id=str(result.get("id") or "") or None,
+        title=title[:300],
+        company=company,
+        url=url,
+        location=None,
+        remote=remote,
+        summary=summary,
+        published_at=published_at,
+        fit_score=fit,
+        fit_note=note,
+        dream=dream,
+    )
+
+
+async def _persist(
+    db: aiosqlite.Connection, candidate: JobLeadCandidate
+) -> tuple[int, bool]:
+    return await insert_job_lead(
+        db,
+        source=candidate.source,
+        source_id=candidate.source_id,
+        title=candidate.title,
+        company=candidate.company,
+        url=candidate.url,
+        location=candidate.location,
+        remote=candidate.remote,
+        summary=candidate.summary,
+        published_at=stamp(candidate.published_at) if candidate.published_at else None,
+        fit_score=candidate.fit_score,
+        fit_note=candidate.fit_note,
+        dream=candidate.dream,
+    )
+
+
+async def run_radar(
+    db: aiosqlite.Connection,
+    *,
+    query: str | None = None,
+    now: datetime | None = None,
+) -> RadarResult:
+    """Search every configured query (or one ad-hoc query) and persist new leads."""
+    moment = now or datetime.now(UTC)
+    queries = (
+        (query.strip(),) if query and query.strip() else settings.job_radar_query_list
+    )
+    since = (
+        (moment - timedelta(days=max(settings.job_radar_days, 1))).date().isoformat()
+    )
+    domains = list(settings.job_radar_domain_list) or None
+    result = RadarResult()
+    seen_urls: set[str] = set()
+
+    for radar_query in queries:
+        outcome = RadarOutcome(query=radar_query)
+        try:
+            hits = await exa_client.search(
+                f"{radar_query} job opening",
+                num_results=10,
+                include_domains=domains,
+                start_published_date=since,
+            )
+        except Exception as exc:
+            outcome.failed = True
+            outcome.error = trim_to_boundary(str(exc), 160) or exc.__class__.__name__
+            result.outcomes.append(outcome)
+            logger.warning("Job radar query %r failed: %s", radar_query, exc)
+            continue
+        outcome.fetched = len(hits)
+        result.outcomes.append(outcome)
+
+        for hit in hits:
+            candidate = candidate_from_exa(hit)
+            if candidate is None or candidate.url in seen_urls:
+                continue
+            seen_urls.add(candidate.url)
+            if candidate.fit_score < settings.job_min_fit and not candidate.dream:
+                result.below_fit += 1
+                continue
+            lead_id, created = await _persist(db, candidate)
+            if not created:
+                result.already_known += 1
+                continue
+            row = await get_job_lead_by_id(db, lead_id)
+            if row is not None:
+                result.new_leads.append(_row_to_lead(row))
+
+    result.new_leads.sort(key=lambda lead: (lead.dream, lead.fit_score), reverse=True)
+    logger.info(
+        "Job radar: %d queries, %d new, %d known, %d below fit.",
+        len(queries),
+        len(result.new_leads),
+        result.already_known,
+        result.below_fit,
+    )
+    return result
+
+
+async def get_lead(db: aiosqlite.Connection, lead_id: int) -> JobLead:
+    row = await get_job_lead_by_id(db, lead_id)
+    if row is None:
+        raise LookupError(f"Job lead {lead_id} not found.")
+    return _row_to_lead(row)
+
+
+async def mark_status(
+    db: aiosqlite.Connection,
+    *,
+    lead_id: int,
+    status: JobStatus,
+    note: str | None = None,
+    now: datetime | None = None,
+) -> JobLead:
+    await get_lead(db, lead_id)
+    applied_at = (
+        stamp(now or datetime.now(UTC)) if status is JobStatus.APPLIED else None
+    )
+    await update_job_lead_status(
+        db,
+        lead_id=lead_id,
+        status=status.value,
+        notes=note.strip() if note and note.strip() else None,
+        applied_at=applied_at,
+    )
+    return await get_lead(db, lead_id)
+
+
+async def pipeline(db: aiosqlite.Connection) -> dict[JobStatus, list[JobLead]]:
+    rows = await list_job_leads(
+        db, statuses=tuple(s.value for s in ACTIVE_STATUSES), limit=40
+    )
+    grouped: dict[JobStatus, list[JobLead]] = {status: [] for status in ACTIVE_STATUSES}
+    for row in rows:
+        lead = _row_to_lead(row)
+        grouped[lead.status].append(lead)
+    return grouped
+
+
+async def status_counts(db: aiosqlite.Connection) -> dict[str, int]:
+    return await count_job_leads_by_status(db)
+
+
+_STATUS_WORDS: dict[str, JobStatus] = {
+    "aplicado": JobStatus.APPLIED,
+    "aplicada": JobStatus.APPLIED,
+    "applied": JobStatus.APPLIED,
+    "entrevista": JobStatus.INTERVIEW,
+    "interview": JobStatus.INTERVIEW,
+    "oferta": JobStatus.OFFER,
+    "offer": JobStatus.OFFER,
+    "rechazado": JobStatus.REJECTED,
+    "rechazada": JobStatus.REJECTED,
+    "rejected": JobStatus.REJECTED,
+    "guardado": JobStatus.SAVED,
+    "guardada": JobStatus.SAVED,
+    "guardar": JobStatus.SAVED,
+    "saved": JobStatus.SAVED,
+    "descartado": JobStatus.DISMISSED,
+    "descartada": JobStatus.DISMISSED,
+    "descartar": JobStatus.DISMISSED,
+    "dismissed": JobStatus.DISMISSED,
+}
+
+
+def parse_status_word(word: str) -> JobStatus | None:
+    return _STATUS_WORDS.get(word.strip().lower())

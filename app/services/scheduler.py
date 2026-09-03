@@ -18,7 +18,7 @@ import aiosqlite
 
 from app.core.config import settings
 from app.integrations.telegram_client import send_message
-from app.services import post_ledger, telegram_orchestrator
+from app.services import job_radar, post_ledger, telegram_orchestrator
 from app.utils import telegram_formatting
 
 logger = logging.getLogger(__name__)
@@ -134,6 +134,25 @@ async def run_cadence_reminder_job() -> None:
         logger.info("Cadence reminder not due: target met or reminded recently.")
         return
     await send_message(settings.telegram_admin_chat_id, text)
+
+
+async def run_job_radar_job() -> None:
+    """Weekly vacancy scan. Sends only when there is something new or a failure."""
+    if settings.telegram_admin_chat_id <= 0:
+        logger.info("Job radar skipped: TELEGRAM_ADMIN_CHAT_ID not configured.")
+        return
+
+    async with aiosqlite.connect(settings.db_path) as db:
+        db.row_factory = aiosqlite.Row
+        radar = await job_radar.run_radar(db)
+
+    if not radar.new_leads and not radar.all_failed:
+        logger.info("Job radar: nothing new this week; no message sent.")
+        return
+    await send_message(
+        settings.telegram_admin_chat_id,
+        telegram_formatting.format_job_radar(radar, scheduled=True),
+    )
 
 
 class LocalScheduler:
