@@ -30,10 +30,20 @@ from app.db.queries import (
     get_job_lead_by_id,
     insert_job_lead,
     list_job_leads,
+    list_job_leads_pending_enrichment,
+    set_job_lead_posting_text,
+    update_job_lead_details,
     update_job_lead_status,
 )
 from app.integrations import exa_client
-from app.schemas.jobs import ACTIVE_STATUSES, JobLead, JobLeadCandidate, JobStatus
+from app.schemas.jobs import (
+    ACTIVE_STATUSES,
+    JobLead,
+    JobLeadCandidate,
+    JobPostingDetails,
+    JobStatus,
+)
+from app.services.generation import get_job_details_extractor
 from app.services.post_ledger import parse_stamp, stamp
 from app.utils.text import trim_to_boundary
 
@@ -162,6 +172,7 @@ class RadarResult:
 
 
 def _row_to_lead(row: aiosqlite.Row) -> JobLead:
+    keys = row.keys()
     remote_raw = row["remote"]
     return JobLead(
         id=int(row["id"]),
@@ -182,7 +193,20 @@ def _row_to_lead(row: aiosqlite.Row) -> JobLead:
         found_at=parse_stamp(row["found_at"]) or datetime.now(UTC),
         applied_at=parse_stamp(row["applied_at"]),
         updated_at=parse_stamp(row["updated_at"]),
+        details=_details_from_row(row),
+        enriched_at=parse_stamp(row["enriched_at"]) if "enriched_at" in keys else None,
+        has_posting_text=bool(row["posting_text"]) if "posting_text" in keys else False,
     )
+
+
+def _details_from_row(row: aiosqlite.Row) -> JobPostingDetails | None:
+    if "details_json" not in row.keys() or not row["details_json"]:
+        return None
+    try:
+        return JobPostingDetails.model_validate_json(str(row["details_json"]))
+    except ValueError:
+        logger.warning("Malformed details_json on job lead %s.", row["id"])
+        return None
 
 
 def company_from_url(url: str) -> str | None:
@@ -382,6 +406,7 @@ async def run_radar(
                 num_results=10,
                 include_domains=domains,
                 start_published_date=since,
+                with_text=True,
             )
         except Exception as exc:
             outcome.failed = True
@@ -405,9 +430,23 @@ async def run_radar(
             if not created:
                 result.already_known += 1
                 continue
+            posting_text = (hit.get("text") or "").strip()
+            if posting_text:
+                await set_job_lead_posting_text(
+                    db, lead_id=lead_id, posting_text=posting_text[:12000]
+                )
             row = await get_job_lead_by_id(db, lead_id)
             if row is not None:
                 result.new_leads.append(_row_to_lead(row))
+
+    # Salary, country and requirements for the best new leads, inline. The
+    # weekly cron enriches the rest so a chat command stays responsive.
+    result.new_leads.sort(key=lambda lead: (lead.dream, lead.fit_score), reverse=True)
+    inline_limit = max(settings.job_enrich_inline_limit, 0)
+    for index, lead in enumerate(result.new_leads[:inline_limit]):
+        enriched = await enrich_lead(db, lead.id)
+        if enriched is not None:
+            result.new_leads[index] = enriched
 
     result.new_leads.sort(key=lambda lead: (lead.dream, lead.fit_score), reverse=True)
     result.below_fit_samples.sort(key=lambda c: c.fit_score, reverse=True)
@@ -420,6 +459,73 @@ async def run_radar(
         result.below_fit,
     )
     return result
+
+
+async def enrich_lead(db: aiosqlite.Connection, lead_id: int) -> JobLead | None:
+    """Extract salary/country/requirements from the stored posting text.
+
+    Returns the refreshed lead, or None when there is nothing to extract from
+    (no posting text, no LLM) or the extractor failed. Never raises.
+    """
+    row = await get_job_lead_by_id(db, lead_id)
+    if row is None:
+        return None
+    keys = row.keys()
+    posting_text = str(row["posting_text"]) if "posting_text" in keys else ""
+    if not posting_text.strip():
+        return None
+    extractor = get_job_details_extractor()
+    if extractor is None:
+        return None
+    try:
+        details = await extractor.generate(
+            title=str(row["title"]), url=str(row["url"]), text=posting_text
+        )
+    except Exception as exc:  # belt-and-suspenders: never break a radar run
+        logger.warning("Job details extraction raised for lead %s: %s", lead_id, exc)
+        return None
+    if details is None:
+        return None
+
+    location = ", ".join(part for part in (details.city, details.country) if part)
+    await update_job_lead_details(
+        db,
+        lead_id=lead_id,
+        details_json=details.model_dump_json(),
+        salary_text=details.salary_text,
+        salary_min_usd_year=details.salary_min_usd_year,
+        salary_max_usd_year=details.salary_max_usd_year,
+        country=details.country,
+        remote_policy=details.remote_policy,
+        location=location or None,
+        company=details.company,
+        enriched_at=stamp(datetime.now(UTC)),
+    )
+    return await get_lead(db, lead_id)
+
+
+async def enrich_pending(db: aiosqlite.Connection, *, limit: int = 20) -> int:
+    """Enrich leads that still lack details. Used by the weekly cron."""
+    rows = await list_job_leads_pending_enrichment(db, limit=limit)
+    done = 0
+    for row in rows:
+        if await enrich_lead(db, int(row["id"])) is not None:
+            done += 1
+    return done
+
+
+def salary_verdict(lead: JobLead) -> str | None:
+    """Compare the stated USD salary with the goal. None when not comparable."""
+    details = lead.details
+    if details is None:
+        return None
+    target = settings.target_salary_usd_year
+    reference = details.salary_max_usd_year or details.salary_min_usd_year
+    if reference is None:
+        return None
+    if reference >= target:
+        return "por encima de tu meta"
+    return "por debajo de tu meta"
 
 
 async def get_lead(db: aiosqlite.Connection, lead_id: int) -> JobLead:

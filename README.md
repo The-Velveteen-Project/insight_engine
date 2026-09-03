@@ -360,6 +360,10 @@ The active goal is a job, so the operator also watches the market.
   `job_leads`; leads already known are counted, not repeated
 - fit is deterministic keyword scoring with a readable note; companies in
   `JOB_TARGET_COMPANIES` are flagged with ⭐ and sorted first
+- the posting text is stored and an extraction call (utility model) pulls
+  salary, country, remote policy, seniority and requirements into structured
+  fields; `vacante <id>` shows them and compares the salary with
+  `TARGET_SALARY_USD_YEAR`
 - `aplicado <id> [nota]`, `estado <id> entrevista|oferta|rechazado|guardado|
   descartado [nota]` and `pipeline` move and show the application pipeline
 - a weekly radar runs Mondays and sends a message only when there is

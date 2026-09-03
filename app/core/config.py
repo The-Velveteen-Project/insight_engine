@@ -94,6 +94,12 @@ class Settings(BaseSettings):
     )
     job_radar_days: int = 21
     job_min_fit: float = 0.3
+    # Salary reference for the goal (USD 4k/month) and enrichment limits:
+    # how many new leads get salary/country extraction inside a chat command
+    # (the weekly cron enriches the rest), and the extractor timeout.
+    target_salary_usd_year: float = 48000.0
+    job_enrich_inline_limit: int = 5
+    job_details_timeout_seconds: float = 30.0
 
     # Phase 1 cadence: how many published posts per week the operator expects,
     # and how long it waits before nagging again.

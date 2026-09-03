@@ -31,6 +31,7 @@ from app.prompts.handoff_match import (
     HANDOFF_MATCH_SYSTEM_PROMPT,
     build_handoff_match_prompt,
 )
+from app.prompts.job_details import JOB_DETAILS_SYSTEM_PROMPT, build_job_details_prompt
 from app.schemas.drafts import DraftGenerationInput, EditorialDraftContent
 from app.schemas.editorial import (
     EditorialGenerationInput,
@@ -39,6 +40,7 @@ from app.schemas.editorial import (
     WeeklyThesisGenerationInput,
 )
 from app.schemas.goals import HandoffMatchInput, HandoffRepoMatch
+from app.schemas.jobs import JobPostingDetails
 
 logger = logging.getLogger(__name__)
 
@@ -267,6 +269,53 @@ class OpenAIHandoffMatcher:
             max_tokens=400,
             temperature=0.1,
         )
+
+
+class OpenAIJobDetailsExtractor:
+    """Posting text -> JobPostingDetails. Extraction only, no judgment."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        timeout_seconds: float,
+    ) -> None:
+        self._client = build_async_openai_client(
+            api_key=api_key,
+            timeout_seconds=timeout_seconds,
+        )
+        self._model = model
+
+    async def generate(
+        self, *, title: str, url: str, text: str
+    ) -> JobPostingDetails | None:
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=JOB_DETAILS_SYSTEM_PROMPT,
+            user=build_job_details_prompt(title=title, url=url, text=text),
+            response_cls=JobPostingDetails,
+            max_tokens=900,
+            temperature=0,
+        )
+
+
+_job_details_extractor: OpenAIJobDetailsExtractor | None = None
+
+
+def get_job_details_extractor() -> OpenAIJobDetailsExtractor | None:
+    global _job_details_extractor
+    if _job_details_extractor is None and settings.openai_api_key:
+        _job_details_extractor = OpenAIJobDetailsExtractor(
+            api_key=settings.openai_api_key,
+            model=settings.resolved_utility_model,
+            timeout_seconds=settings.job_details_timeout_seconds,
+        )
+        logger.info(
+            "OpenAIJobDetailsExtractor initialized (model=%s).",
+            settings.resolved_utility_model,
+        )
+    return _job_details_extractor
 
 
 _generator: OpenAIEditorialGenerator | None = None

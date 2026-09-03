@@ -224,6 +224,15 @@ _MIGRATIONS: list[str] = [
     " REFERENCES active_goals(id)",
     # Phase 1: remember the last generated post per chat so "publicado" works.
     "ALTER TABLE telegram_sessions ADD COLUMN last_post_id INTEGER",
+    # Phase 2.5: posting text and extracted facts (salary, country, requirements).
+    "ALTER TABLE job_leads ADD COLUMN posting_text TEXT",
+    "ALTER TABLE job_leads ADD COLUMN details_json TEXT",
+    "ALTER TABLE job_leads ADD COLUMN salary_text TEXT",
+    "ALTER TABLE job_leads ADD COLUMN salary_min_usd_year REAL",
+    "ALTER TABLE job_leads ADD COLUMN salary_max_usd_year REAL",
+    "ALTER TABLE job_leads ADD COLUMN country TEXT",
+    "ALTER TABLE job_leads ADD COLUMN remote_policy TEXT",
+    "ALTER TABLE job_leads ADD COLUMN enriched_at TIMESTAMP",
 ]
 
 _CREATE_INDEXES = [

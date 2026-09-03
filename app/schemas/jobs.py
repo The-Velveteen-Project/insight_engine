@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -49,6 +50,39 @@ class JobLeadCandidate(BaseModel):
     dream: bool = False
 
 
+class JobPostingDetails(BaseModel):
+    """Structured facts extracted from the posting text. Null means "not stated".
+
+    Salary is normalized to USD per year only when the posting states USD;
+    other currencies keep the raw text and leave the numeric fields empty.
+    """
+
+    one_line: str = Field(default="", max_length=240)
+    company: str | None = Field(default=None, max_length=160)
+    salary_text: str | None = Field(default=None, max_length=160)
+    salary_min_usd_year: float | None = Field(default=None, ge=0)
+    salary_max_usd_year: float | None = Field(default=None, ge=0)
+    country: str | None = Field(default=None, max_length=80)
+    city: str | None = Field(default=None, max_length=80)
+    remote_policy: Literal["remote", "hybrid", "onsite", "unknown"] = "unknown"
+    location_restriction: str | None = Field(default=None, max_length=200)
+    seniority: str | None = Field(default=None, max_length=60)
+    years_required: int | None = Field(default=None, ge=0, le=40)
+    must_have: list[str] = Field(default_factory=list, max_length=8)
+    nice_to_have: list[str] = Field(default_factory=list, max_length=6)
+    education: str | None = Field(default=None, max_length=120)
+
+    def salary_summary(self) -> str | None:
+        lo, hi = self.salary_min_usd_year, self.salary_max_usd_year
+        if lo is not None and hi is not None and hi > 0:
+            return f"USD {lo / 1000:.0f}k–{hi / 1000:.0f}k/año"
+        if lo is not None:
+            return f"USD {lo / 1000:.0f}k+/año"
+        if hi is not None:
+            return f"hasta USD {hi / 1000:.0f}k/año"
+        return self.salary_text
+
+
 class JobLead(JobLeadCandidate):
     id: int
     status: JobStatus
@@ -56,3 +90,6 @@ class JobLead(JobLeadCandidate):
     found_at: datetime
     applied_at: datetime | None = None
     updated_at: datetime | None = None
+    details: JobPostingDetails | None = None
+    enriched_at: datetime | None = None
+    has_posting_text: bool = False

@@ -145,6 +145,12 @@ async def run_job_radar_job() -> None:
     async with aiosqlite.connect(settings.db_path) as db:
         db.row_factory = aiosqlite.Row
         radar = await job_radar.run_radar(db)
+        enriched = await job_radar.enrich_pending(db, limit=20)
+        if enriched:
+            # Re-read so the message carries salary and country for every lead.
+            radar.new_leads = [
+                await job_radar.get_lead(db, lead.id) for lead in radar.new_leads
+            ]
 
     if not radar.new_leads and not radar.all_failed:
         logger.info("Job radar: nothing new this week; no message sent.")

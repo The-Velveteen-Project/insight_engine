@@ -190,6 +190,11 @@ _PIPELINE_RE = re.compile(
     r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)\s*[?¿!]*\s*$",
     re.I,
 )
+_LEAD_DETAIL_RE = re.compile(
+    r"^(?:mu[eé]strame\s+|dame\s+|detalle\s+(?:de\s+)?|ver\s+)?"
+    r"(?:la\s+)?(?:vacante|lead|oferta)\s+#?(?P<id>\d+)\s*[?¿!]*\s*$",
+    re.I,
+)
 _LEAD_STATUS_RE = re.compile(
     r"^(?:estado|marca)\s+(?:vacante\s+|lead\s+)?#?(?P<id>\d+)\s+"
     r"(?P<status>\w+)(?P<rest>.*)$",
@@ -275,6 +280,8 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "apliqué": CommandName.APPLIED,
     "estado": CommandName.LEAD_STATUS,
     "pipeline": CommandName.PIPELINE,
+    "vacante": CommandName.LEAD_DETAIL,
+    "lead": CommandName.LEAD_DETAIL,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -817,6 +824,13 @@ def _natural_command(
         return ParsedTelegramCommand(
             name=CommandName.PIPELINE,
             query=None,
+            raw_text=text,
+        )
+    detail_match = _LEAD_DETAIL_RE.match(stripped)
+    if detail_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.LEAD_DETAIL,
+            query=detail_match.group("id"),
             raw_text=text,
         )
     status_match = _LEAD_STATUS_RE.match(stripped)
@@ -1896,6 +1910,22 @@ async def handle_command(
     if command.name == CommandName.PIPELINE:
         grouped = await job_radar.pipeline(db)
         return telegram_formatting.format_pipeline(grouped)
+
+    if command.name == CommandName.LEAD_DETAIL:
+        lead_id, _ = _parse_lead_args(command.query or "")
+        if lead_id is None:
+            return "<b>Uso:</b> <code>vacante &lt;id&gt;</code>"
+        try:
+            lead = await job_radar.get_lead(db, lead_id)
+        except LookupError:
+            return _not_found("Vacante", lead_id)
+        if lead.details is None and lead.has_posting_text:
+            enriched = await job_radar.enrich_lead(db, lead_id)
+            if enriched is not None:
+                lead = enriched
+        return telegram_formatting.format_lead_detail(
+            lead, salary_verdict=job_radar.salary_verdict(lead)
+        )
 
     if command.name == CommandName.PUBLISHED:
         url, explicit_id = _parse_published_args(command.query or "")

@@ -1252,18 +1252,110 @@ _JOB_STATUS_LABELS: dict[JobStatus, str] = {
 }
 
 
+_REMOTE_POLICY_LABELS = {
+    "remote": "remoto",
+    "hybrid": "híbrido",
+    "onsite": "presencial",
+}
+
+
+def _lead_facts(lead: JobLead) -> str:
+    """Salary · country · remote policy, only the parts the posting stated."""
+    details = lead.details
+    if details is None:
+        return " · remoto" if lead.remote else ""
+    parts: list[str] = []
+    salary = details.salary_summary()
+    if salary:
+        parts.append(salary)
+    if details.country:
+        parts.append(details.country)
+    policy = _REMOTE_POLICY_LABELS.get(details.remote_policy)
+    if policy:
+        parts.append(policy)
+    elif lead.remote:
+        parts.append("remoto")
+    return (" · " + " · ".join(escape_text(p) for p in parts)) if parts else ""
+
+
 def _lead_lines(lead: JobLead, *, with_note: bool = True) -> list[str]:
     company = f" · {escape_text(lead.company)}" if lead.company else ""
     flag = "⭐ " if lead.dream else ""
-    remote = " · remoto" if lead.remote else ""
     lines = [
         f"• {flag}#{lead.id} · <b>{escape_text(compact_text(lead.title, 110))}</b>"
-        f"{company}{remote} · fit {lead.fit_score:.2f}"
+        f"{company} · fit {lead.fit_score:.2f}{_lead_facts(lead)}"
     ]
     if with_note and lead.fit_note:
         lines.append(f"  {escape_text(compact_text(lead.fit_note, 160))}")
     lines.append(f'  ↗ <a href="{escape_text(lead.url)}">ver vacante</a>')
     return lines
+
+
+def format_lead_detail(lead: JobLead, *, salary_verdict: str | None) -> str:
+    flag = "⭐ " if lead.dream else ""
+    lines = [
+        f"<b>{flag}Vacante #{lead.id} · {escape_text(lead.title)}</b>",
+        (escape_text(lead.company) if lead.company else "Empresa no identificada")
+        + f" · estado: {_JOB_STATUS_LABELS.get(lead.status, lead.status.value)}"
+        + f" · fit {lead.fit_score:.2f}",
+    ]
+    if lead.fit_note:
+        lines.append(escape_text(compact_text(lead.fit_note, 200)))
+    details = lead.details
+    if details is None:
+        lines.append("")
+        if lead.has_posting_text:
+            lines.append(
+                "Todavía no extraje salario ni requisitos de esta vacante. "
+                "Vuelve a pedirla en un momento o espera al radar del lunes."
+            )
+        else:
+            lines.append(
+                "No tengo el texto de la oferta, así que no puedo decirte salario "
+                "ni requisitos. Ábrela con el link."
+            )
+        lines.append(f'↗ <a href="{escape_text(lead.url)}">ver vacante</a>')
+        return "\n".join(lines)
+
+    lines.append("")
+    if details.one_line:
+        lines.append(escape_text(details.one_line))
+    salary = details.salary_summary()
+    lines.append(
+        "Salario: "
+        + (
+            f"{escape_text(salary)}"
+            + (f" ({escape_text(salary_verdict)})" if salary_verdict else "")
+            if salary
+            else "no lo dice"
+        )
+    )
+    place = ", ".join(p for p in (details.city, details.country) if p)
+    policy = _REMOTE_POLICY_LABELS.get(details.remote_policy, "no lo dice")
+    lines.append(
+        f"Ubicación: {escape_text(place) if place else 'no la dice'} · {policy}"
+    )
+    if details.location_restriction:
+        lines.append(f"Restricción: {escape_text(details.location_restriction)}")
+    seniority_bits = [b for b in (details.seniority, details.education) if b]
+    if details.years_required is not None:
+        seniority_bits.append(f"{details.years_required}+ años")
+    if seniority_bits:
+        lines.append("Nivel: " + escape_text(" · ".join(seniority_bits)))
+    if details.must_have:
+        lines.append("")
+        lines.append("<b>Piden</b>")
+        lines.extend(f"• {escape_text(item)}" for item in details.must_have)
+    if details.nice_to_have:
+        lines.append("<b>Valoran</b>")
+        lines.extend(f"• {escape_text(item)}" for item in details.nice_to_have)
+    lines.append("")
+    lines.append(f'↗ <a href="{escape_text(lead.url)}">ver vacante</a>')
+    lines.append(
+        f"Mover: <code>aplicado {lead.id}</code> · "
+        f"<code>estado {lead.id} guardado|descartado</code>"
+    )
+    return "\n".join(lines)
 
 
 def format_job_radar(result: RadarResult, *, scheduled: bool = False) -> str:

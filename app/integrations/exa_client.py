@@ -44,6 +44,7 @@ class ExaResultDict(TypedDict, total=False):
     url: str
     publishedDate: str | None  # noqa: N815 — Exa uses camelCase
     highlights: list[str]
+    text: str
     score: float
 
 
@@ -113,8 +114,13 @@ async def search(
     num_results: int = 10,
     include_domains: list[str] | None = None,
     start_published_date: str | None = None,
+    with_text: bool = False,
+    text_max_characters: int = 6000,
 ) -> list[ExaResultDict]:
     """Raw Exa neural search. Shared by discovery and the job radar.
+
+    `with_text` also returns the page body (bounded), which the job radar
+    feeds to the posting extractor for salary, location and requirements.
 
     Raises RuntimeError when EXA_API_KEY is not configured so callers can
     report a failed source instead of silently returning nothing.
@@ -123,11 +129,14 @@ async def search(
     if not api_key:
         raise RuntimeError("EXA_API_KEY no configurada")
 
+    contents: dict[str, object] = {"highlights": {"max_characters": 4000}}
+    if with_text:
+        contents["text"] = {"maxCharacters": text_max_characters}
     body: dict[str, object] = {
         "query": query,
         "type": "neural",
         "numResults": num_results,
-        "contents": {"highlights": {"max_characters": 4000}},
+        "contents": contents,
     }
     if include_domains:
         body["includeDomains"] = include_domains

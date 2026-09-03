@@ -246,3 +246,78 @@ def test_company_slug_decoding_and_person_profiles_filtered() -> None:
         title="AI Scientist", summary="", company="Mistral AI"
     )
     assert score >= 0.45
+
+
+async def test_radar_stores_posting_text_and_enriches_inline(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    from app.schemas.jobs import JobPostingDetails
+    from tests.test_telegram_html import assert_valid_telegram_html
+
+    monkeypatch.setattr("app.services.job_radar.settings.job_radar_queries", "q1")
+    hits = _hits("enrich")
+    hits[0]["text"] = "Salary $150,000 - $200,000. Remote, US only. PhD or MSc."
+
+    class _Extractor:
+        async def generate(self, *, title: str, url: str, text: str):
+            assert "Salary" in text
+            return JobPostingDetails(
+                one_line="Build forecasting models.",
+                salary_text="$150,000 - $200,000",
+                salary_min_usd_year=150000,
+                salary_max_usd_year=200000,
+                country="United States",
+                remote_policy="remote",
+                location_restriction="US only",
+                must_have=["MSc or PhD", "PyTorch <2.x>"],
+            )
+
+    monkeypatch.setattr(
+        "app.services.job_radar.get_job_details_extractor", lambda: _Extractor()
+    )
+    with patch(
+        "app.services.job_radar.exa_client.search", AsyncMock(return_value=hits)
+    ):
+        result = await job_radar.run_radar(db)
+
+    top = result.new_leads[0]
+    assert top.details is not None
+    assert top.details.salary_summary() == "USD 150k–200k/año"
+    assert top.details.country == "United States"
+    assert job_radar.salary_verdict(top) == "por encima de tu meta"
+
+    radar_text = fmt.format_job_radar(result)
+    assert "USD 150k–200k/año" in radar_text
+    assert_valid_telegram_html(radar_text)
+
+    detail = await handle_command(f"/vacante {top.id}", db)
+    assert "Piden" in detail and "MSc or PhD" in detail
+    assert "por encima de tu meta" in detail
+    assert_valid_telegram_html(detail)
+
+    natural = await handle_operator_text(
+        f"muéstrame la vacante {top.id}", db, chat_id=5200
+    )
+    assert natural is not None and "Salario" in natural
+
+
+async def test_lead_detail_without_text_is_honest(db: aiosqlite.Connection) -> None:
+    from app.db.queries import insert_job_lead
+
+    lead_id, _ = await insert_job_lead(
+        db,
+        source="manual",
+        source_id=None,
+        title="Research Engineer",
+        company="Acme",
+        url="https://example.com/jobs/no-text-1",
+        location=None,
+        remote=None,
+        summary="",
+        published_at=None,
+        fit_score=0.5,
+        fit_note="rol: research engineer",
+        dream=False,
+    )
+    detail = await handle_command(f"/vacante {lead_id}", db)
+    assert "No tengo el texto de la oferta" in detail

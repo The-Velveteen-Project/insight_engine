@@ -38,6 +38,7 @@ class CommandName(StrEnum):
     APPLIED = "aplicado"
     LEAD_STATUS = "estado"
     PIPELINE = "pipeline"
+    LEAD_DETAIL = "vacante"
     RESET_EDITORIAL = "reset_editorial"
     DIAG = "diag"
     HELP = "help"

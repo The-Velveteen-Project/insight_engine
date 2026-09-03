@@ -954,6 +954,77 @@ async def update_job_lead_status(
     return bool(cursor.rowcount)
 
 
+async def set_job_lead_posting_text(
+    db: aiosqlite.Connection, *, lead_id: int, posting_text: str
+) -> None:
+    await db.execute(
+        "UPDATE job_leads SET posting_text = ? WHERE id = ? AND posting_text IS NULL",
+        (posting_text, lead_id),
+    )
+    await db.commit()
+
+
+async def update_job_lead_details(
+    db: aiosqlite.Connection,
+    *,
+    lead_id: int,
+    details_json: str,
+    salary_text: str | None,
+    salary_min_usd_year: float | None,
+    salary_max_usd_year: float | None,
+    country: str | None,
+    remote_policy: str | None,
+    location: str | None,
+    company: str | None,
+    enriched_at: str,
+) -> None:
+    await db.execute(
+        """
+        UPDATE job_leads
+        SET details_json = ?,
+            salary_text = ?,
+            salary_min_usd_year = ?,
+            salary_max_usd_year = ?,
+            country = ?,
+            remote_policy = ?,
+            location = COALESCE(?, location),
+            company = COALESCE(company, ?),
+            enriched_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            details_json,
+            salary_text,
+            salary_min_usd_year,
+            salary_max_usd_year,
+            country,
+            remote_policy,
+            location,
+            company,
+            enriched_at,
+            lead_id,
+        ),
+    )
+    await db.commit()
+
+
+async def list_job_leads_pending_enrichment(
+    db: aiosqlite.Connection, *, limit: int
+) -> list[aiosqlite.Row]:
+    cursor = await db.execute(
+        """
+        SELECT * FROM job_leads
+        WHERE enriched_at IS NULL AND posting_text IS NOT NULL
+          AND status NOT IN ('dismissed', 'rejected')
+        ORDER BY dream DESC, fit_score DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return list(await cursor.fetchall())
+
+
 async def count_job_leads_by_status(db: aiosqlite.Connection) -> dict[str, int]:
     cursor = await db.execute("SELECT status, COUNT(*) FROM job_leads GROUP BY status")
     rows = await cursor.fetchall()
