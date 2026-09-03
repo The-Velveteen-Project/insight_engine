@@ -50,6 +50,7 @@ from app.schemas.github import GitHubInsightCandidate
 from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services import (
     active_goals,
+    diagnostics,
     discovery_service,
     draft_generator,
     editorial_planner,
@@ -223,6 +224,7 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "linkedin": CommandName.LINKEDIN,
     "linkedin_prompt": CommandName.LINKEDIN_PROMPT,
     "opinion": CommandName.OPINION,
+    "diag": CommandName.DIAG,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -1719,6 +1721,13 @@ async def handle_command(
             deadline_at=deadline,
         )
         return telegram_formatting.format_goal_set(new_goal)
+
+    if command.name == CommandName.DIAG:
+        current_goal = await active_goals.get_current(db)
+        report = await diagnostics.build_report(
+            current_goal.label if current_goal is not None else None
+        )
+        return telegram_formatting.format_diag(report)
 
     if command.name == CommandName.CLEAR_GOAL:
         archived = await active_goals.clear_active(db)

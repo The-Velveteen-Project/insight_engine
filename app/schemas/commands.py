@@ -32,6 +32,7 @@ class CommandName(StrEnum):
     LINKEDIN_PROMPT = "linkedin_prompt"
     OPINION = "opinion"
     EXPLAIN_SIGNALS = "explain_signals"
+    DIAG = "diag"
     HELP = "help"
     UNKNOWN = "unknown"
 

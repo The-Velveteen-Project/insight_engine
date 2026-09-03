@@ -565,9 +565,7 @@ def test_format_weekly_summary_renders_handoff_proposal_when_set() -> None:
             "El paper más tu repo dan sustancia para scopear un build de una semana."
         ),
         signals_evaluated=24,
-        active_goal=(
-            "cliente $4k posicionando agentic workflows aplicados"
-        ),
+        active_goal=("cliente $4k posicionando agentic workflows aplicados"),
     )
 
     text = telegram_formatting.format_weekly_summary(summary)
@@ -1555,9 +1553,7 @@ def test_balanced_weekly_selection_picks_one_of_each_when_both_present() -> None
     assert len(selected) == 3
 
 
-def test_balanced_weekly_selection_falls_back_to_github_only_when_no_external() -> (
-    None
-):
+def test_balanced_weekly_selection_falls_back_to_github_only_when_no_external() -> None:
     from app.services.telegram_orchestrator import _balanced_weekly_selection
 
     github_refs = [
@@ -1736,11 +1732,7 @@ def test_linkedin_fallback_does_not_stitch_template_instructions() -> None:
 
     post = _fallback_post(context)
     assembled = (
-        post.hook
-        + " "
-        + " ".join(post.body_paragraphs)
-        + " "
-        + post.closing
+        post.hook + " " + " ".join(post.body_paragraphs) + " " + post.closing
     ).lower()
     # The closing instruction string from draft_closing must NOT leak into
     # the assembled post — that was the old bug.
@@ -1764,9 +1756,7 @@ async def test_handle_command_linkedin_prompt_renders_kit(
             "User prompt completo con bastante contexto del plan que sirve "
             "para que cualquier LLM produzca el post sin más entrada."
         ),
-        one_line_paste_command=(
-            "Eres mi asistente editorial. Pégalo y dame el post."
-        ),
+        one_line_paste_command=("Eres mi asistente editorial. Pégalo y dame el post."),
     )
 
     with patch(
@@ -1897,3 +1887,29 @@ def test_format_weekly_summary_omits_footer_when_no_stats() -> None:
     )
     text = telegram_formatting.format_weekly_summary(summary)
     assert "Discovery esta semana" not in text
+
+
+async def test_diag_reports_llm_failure_without_leaking_keys(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    async def _failing_probe() -> tuple[bool, str]:
+        return False, "AuthenticationError: Incorrect API key provided: sk-abc"
+
+    monkeypatch.setattr("app.services.diagnostics.llm_probe", _failing_probe)
+    monkeypatch.setattr("app.services.diagnostics.settings.openai_api_key", "sk-real")
+    response = await handle_command("/diag", db)
+    assert "Diagnóstico" in response
+    assert "❌" in response
+    assert "AuthenticationError" in response
+    assert "sk-real" not in response
+    assert "Revisa OPENAI_API_KEY" in response
+
+
+async def test_diag_reports_llm_ok(db: aiosqlite.Connection, monkeypatch) -> None:
+    async def _ok_probe() -> tuple[bool, str]:
+        return True, "respondió 'ok'"
+
+    monkeypatch.setattr("app.services.diagnostics.llm_probe", _ok_probe)
+    response = await handle_command("/diag", db)
+    assert "✅" in response
+    assert "Revisa OPENAI_API_KEY" not in response

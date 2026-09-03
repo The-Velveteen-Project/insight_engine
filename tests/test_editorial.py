@@ -496,9 +496,7 @@ async def test_generation_service_returns_structured_output() -> None:
     generator._client = SimpleNamespace(  # type: ignore[assignment]
         beta=SimpleNamespace(
             chat=SimpleNamespace(
-                completions=SimpleNamespace(
-                    parse=AsyncMock(return_value=fake_response)
-                )
+                completions=SimpleNamespace(parse=AsyncMock(return_value=fake_response))
             )
         )
     )
@@ -790,9 +788,7 @@ async def test_fallback_why_includes_summary_and_differs_per_signal(
         _signal(
             source_type="arxiv",
             source_id="arxiv-summarytest-1",
-            title=(
-                "AgroAskAI: A Multi-Agentic AI Framework for Smallholder Farmers"
-            ),
+            title=("AgroAskAI: A Multi-Agentic AI Framework for Smallholder Farmers"),
             summary=(
                 "This paper presents an agentic AI system for agricultural queries."
             ),
@@ -829,3 +825,17 @@ async def test_fallback_why_includes_summary_and_differs_per_signal(
     generic = "hay un método o una lección concreta que vale la pena dejar escrita"
     assert generic not in plan_arxiv.why_it_matters
     assert generic not in plan_exa.why_it_matters
+
+
+def test_first_sentence_lets_a_long_first_sentence_finish() -> None:
+    from app.services.editorial_planner import _first_sentence
+
+    text = (
+        "OpenAI researchers collaborated with Georgetown University's Center for "
+        "Security and Emerging Technology and the Stanford Internet Observatory to "
+        "investigate how large language models might be misused for disinformation "
+        "purposes. The collaboration included a workshop."
+    )
+    out = _first_sentence(text, max_chars=180)
+    assert out.endswith("disinformation purposes.")
+    assert "…" not in out

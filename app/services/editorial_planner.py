@@ -37,6 +37,7 @@ logger = logging.getLogger(__name__)
 class EditorialPlanTransitionError(Exception):
     """Raised when a requested editorial plan state change is invalid."""
 
+
 _MVP_KEYWORDS = {
     "agent",
     "api",
@@ -343,6 +344,19 @@ def _first_sentence(text: str, max_chars: int = 240) -> str:
         return ""
     if len(cleaned) <= max_chars:
         return cleaned
+    # A first sentence slightly longer than max_chars is still better than a
+    # clause cut mid-thought; allow it to finish within a hard ceiling.
+    hard_cap = max_chars * 2
+    first_end = min(
+        (
+            cleaned.find(marker)
+            for marker in (". ", "? ", "! ")
+            if cleaned.find(marker) != -1
+        ),
+        default=-1,
+    )
+    if 40 <= first_end < hard_cap:
+        return cleaned[: first_end + 1].strip()
     window = cleaned[:max_chars]
     for marker in (". ", "? ", "! "):
         idx = window.rfind(marker)
@@ -355,8 +369,15 @@ def _first_sentence(text: str, max_chars: int = 240) -> str:
 
 
 _AGENTIC_TERMS = {
-    "agent", "agentic", "multi-agent", "workflow", "orchestrat",
-    "pipeline", "autonom", "llm", "language model",
+    "agent",
+    "agentic",
+    "multi-agent",
+    "workflow",
+    "orchestrat",
+    "pipeline",
+    "autonom",
+    "llm",
+    "language model",
 }
 _CLIMATE_TERMS = {"climate", "sustainab", "green", "carbon", "energy", "environmental"}
 _HEALTH_TERMS = {"health", "medical", "clinical", "patient", "hospital"}
@@ -422,12 +443,9 @@ def _fallback_narrative(
         return f"{connection.capitalize()}: {tail}"
 
     if action == RecommendedAction.MVP:
-        why = (
-            summary_excerpt
-            or _external_why(
-                "vale la pena armar un build mínimo y acotado a una semana "
-                "sobre este ángulo"
-            )
+        why = summary_excerpt or _external_why(
+            "vale la pena armar un build mínimo y acotado a una semana "
+            "sobre este ángulo"
         )
         angle = (
             "Construir un MVP mínimo, scopeado a una semana, sobre el ángulo "
@@ -501,8 +519,7 @@ def _fallback_narrative(
         )
     else:  # ARCHIVE
         why = summary_excerpt or _external_why(
-            "la base no alcanza todavía — mejor archivar y esperar "
-            "evidencia más fuerte"
+            "la base no alcanza todavía — mejor archivar y esperar evidencia más fuerte"
         )
         angle = (
             "Archivar la señal con una nota corta que explique por qué no es "
@@ -555,9 +572,7 @@ async def plan_editorial(
             signal_id for signal_id in signal_ids if signal_id not in found_ids
         ]
         missing_ids_text = ", ".join(str(item) for item in missing_ids)
-        raise LookupError(
-            f"Some requested signals were not found: {missing_ids_text}."
-        )
+        raise LookupError(f"Some requested signals were not found: {missing_ids_text}.")
 
     signals = [_to_signal_context(row) for row in rows]
     primary_signals = sorted(

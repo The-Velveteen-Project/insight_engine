@@ -30,6 +30,7 @@ from app.schemas.editorial import (
 from app.schemas.goals import ActiveGoal
 from app.schemas.linkedin import LinkedInPost, LinkedInPromptKit
 from app.schemas.mvp_handoff import MvpHandoffPack
+from app.services.diagnostics import DiagReport
 
 _SOLID_SIGNAL_THRESHOLD = 0.45
 _WEAK_SIGNAL_THRESHOLD = 0.25
@@ -173,9 +174,7 @@ def format_start_message() -> str:
             "• apruébalo",
             "• draft",
             "",
-            (
-                "Pero también puedes usarme así:"
-            ),
+            ("Pero también puedes usarme así:"),
             "• quiero entender si esto da para una note o un MVP",
             "• cruza esta idea con lo que estamos construyendo en GitHub",
             "• busca señales sobre este tema y dime qué harías tú",
@@ -409,8 +408,7 @@ def _format_source_stats_footer(stats: list[WeeklySourceStats]) -> str:
         label = escape_text(stat.source_label)
         if stat.failed:
             lines.append(
-                f"• {label}: falló — "
-                f"{escape_text(stat.note or 'sin detalle')}"
+                f"• {label}: falló — {escape_text(stat.note or 'sin detalle')}"
             )
             continue
         line = (
@@ -431,9 +429,7 @@ def _weekly_default_thesis(summary: WeeklySummary) -> str:
             "anclada en lo que ya estás moviendo."
         )
     if summary.editorial_action == RecommendedAction.NOTE:
-        return (
-            "Esta semana empujaría una nota técnica acotada antes que un build."
-        )
+        return "Esta semana empujaría una nota técnica acotada antes que un build."
     if summary.editorial_action == RecommendedAction.POST:
         return "La oportunidad se ve más editorial que constructiva esta semana."
     return (
@@ -452,9 +448,8 @@ def format_weekly_summary(summary: WeeklySummary) -> str:
             f"<i>Sub-foco de la semana: "
             f"{_readable_text(summary.focus_label, limit=160)}</i>"
         )
-    extra_seen = (
-        summary.signals_evaluated
-        and summary.signals_evaluated > len(summary.top_signals)
+    extra_seen = summary.signals_evaluated and summary.signals_evaluated > len(
+        summary.top_signals
     )
     lines.append("")
     if extra_seen:
@@ -798,10 +793,7 @@ def format_handoff_offer_after_approve(plan_id: int) -> str:
         [
             "",
             "<b>Veo señal clara de MVP handoff aquí</b>",
-            (
-                f"Puedo armar el handoff del plan #{plan_id} ahora. "
-                "Responde:"
-            ),
+            (f"Puedo armar el handoff del plan #{plan_id} ahora. Responde:"),
             "• <code>sí</code> o <code>hazlo</code> — armo el handoff ya",
             (
                 "• <code>después</code> — te pregunto en 2 días si ya "
@@ -936,13 +928,15 @@ def format_linkedin_post(
             "y regenero el post con tu voz."
         )
         lines.append("")
-    lines.extend([
-        f"<i>{char_count} caracteres · {source_note}</i>",
-        (
-            "Antes de publicar: revísalo, ajústalo y dale tu voz final. "
-            "Soy bueno produciendo, no soy tu publisher."
-        ),
-    ])
+    lines.extend(
+        [
+            f"<i>{char_count} caracteres · {source_note}</i>",
+            (
+                "Antes de publicar: revísalo, ajústalo y dale tu voz final. "
+                "Soy bueno produciendo, no soy tu publisher."
+            ),
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -1012,8 +1006,10 @@ def format_signal_explain(
         # Trim summary to a readable length at a sentence boundary
         trimmed = compact_text(summary, 380)
 
-        title_fmt = _signal_link(f"#{i} {title}", url) if url else (
-            f"<b>{escape_text(compact_text(title, 200))}</b>"
+        title_fmt = (
+            _signal_link(f"#{i} {title}", url)
+            if url
+            else (f"<b>{escape_text(compact_text(title, 200))}</b>")
         )
         lines.append(f"<code>{source}</code> · {title_fmt}")
         if trimmed:
@@ -1026,4 +1022,52 @@ def format_signal_explain(
         "Si querés armar un plan sobre alguna, decime el número "
         "o usá <code>/plan &lt;id&gt;</code>."
     )
+    return "\n".join(lines)
+
+
+def format_diag(report: DiagReport) -> str:
+    """Operator self-check. Never prints keys, only whether they exist."""
+    llm_line = (
+        f"✅ {escape_text(report.llm_detail)}"
+        if report.llm_ok
+        else f"❌ {escape_text(report.llm_detail)}"
+    )
+    lines = [
+        "<b>Diagnóstico del operador</b>",
+        f"commit: <code>{escape_text(report.commit)}</code>",
+        "",
+        "<b>LLM</b>",
+        (
+            f"modelo <code>{escape_text(report.llm_model)}</code> · "
+            f"host <code>{escape_text(report.llm_base_host)}</code> · "
+            f"clave {'presente' if report.llm_key_present else 'ausente'}"
+        ),
+        llm_line,
+        "",
+        "<b>Discovery</b>",
+        f"fuentes: {escape_text(', '.join(report.sources) or 'ninguna')}",
+        f"Exa: clave {'presente' if report.exa_key_present else 'ausente'}",
+        f"feeds RSS configurados: {report.rss_feed_count}",
+        (
+            "Anthropic: clave presente (normaliza con Claude)"
+            if report.anthropic_key_present
+            else "Anthropic: sin clave (normaliza con el LLM principal)"
+        ),
+        "",
+        "<b>Goal activo</b>",
+        _readable_text(report.goal_label, limit=300)
+        if report.goal_label
+        else "ninguno",
+    ]
+    if not report.llm_ok:
+        lines.extend(
+            [
+                "",
+                (
+                    "Mientras el LLM falle, planes, drafts y posts salen con "
+                    "fallback determinista. Revisa OPENAI_API_KEY, "
+                    "OPENAI_BASE_URL y EDITORIAL_MODEL en Railway."
+                ),
+            ]
+        )
     return "\n".join(lines)
