@@ -100,6 +100,10 @@ class Settings(BaseSettings):
     target_salary_usd_year: float = 48000.0
     job_enrich_inline_limit: int = 5
     job_details_timeout_seconds: float = 30.0
+    # Master CV: loaded from the operator_state table (uploaded through
+    # Telegram) or, failing that, from this local file. Never committed.
+    cv_master_path: str = "data/cv_master.md"
+    cv_timeout_seconds: float = 75.0
 
     # Phase 1 cadence: how many published posts per week the operator expects,
     # and how long it waits before nagging again.

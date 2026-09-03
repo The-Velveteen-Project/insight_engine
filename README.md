@@ -368,6 +368,11 @@ The active goal is a job, so the operator also watches the market.
   descartado [nota]` and `pipeline` move and show the application pipeline
 - a weekly radar runs Mondays and sends a message only when there is
   something new or every search failed
+- `brecha <id>` compares the master CV with one posting (covered, missing,
+  what to foreground, an honest verdict); `cv <id>` writes a one-page CV
+  tailored to that posting from the master CV only and sends it as a
+  Markdown document. The master CV is uploaded once as a Telegram document
+  with caption `cv_master` and stored in the database, never in the repo
 - generated LinkedIn posts default to English (`LINKEDIN_LANGUAGE`), with
   Carlos's own published posts as voice exemplars in the writer prompt
 

@@ -22,6 +22,7 @@ from app.schemas.commands import (
     WeeklySourceStats,
     WeeklySummary,
 )
+from app.schemas.cv import GapAnalysis, TailoredCV
 from app.schemas.drafts import PersistedEditorialDraft
 from app.schemas.editorial import (
     EditorialPlanStatus,
@@ -40,6 +41,7 @@ from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services.diagnostics import DiagReport
 
 if TYPE_CHECKING:
+    from app.services.cv_tailor import MasterCV
     from app.services.job_radar import RadarResult
     from app.services.post_ledger import CadenceStatus, PublishResult
 
@@ -1465,4 +1467,140 @@ def format_lead_status_ack(lead: JobLead, counts: dict[str, int]) -> str:
             "Si quieres, armamos un post esta semana que respalde esa aplicación: "
             "<code>github_insights</code> o <code>weekly</code>."
         )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Master CV, gap analysis, tailored CV (Phase 2.6)
+# ---------------------------------------------------------------------------
+
+_VERDICT_LABELS = {
+    "apply_now": "aplica ya",
+    "apply_with_tailoring": "aplica, con el CV reordenado",
+    "stretch": "es un estiramiento: aplica solo con un ángulo claro",
+    "skip": "no aplicaría",
+}
+_STRENGTH_MARKS = {"strong": "✅", "partial": "🟡", "weak": "⚪"}
+
+
+def format_cv_master_missing() -> str:
+    return "\n".join(
+        [
+            "<b>No tengo tu CV maestro.</b>",
+            (
+                "Mándame el archivo <code>cv_master.md</code> como documento "
+                "en este chat, con el caption <code>cv_master</code>. Lo guardo "
+                "fuera del repo y desde ahí armo brechas y CVs a la medida."
+            ),
+        ]
+    )
+
+
+def format_cv_master_status(master: MasterCV, *, just_saved: bool) -> str:
+    words = len(master.text.split())
+    when = master.updated_at.strftime("%Y-%m-%d") if master.updated_at else "sin fecha"
+    source = "base de datos" if master.source == "db" else "archivo local"
+    lines = [
+        "<b>CV maestro guardado.</b>" if just_saved else "<b>CV maestro</b>",
+        f"{words} palabras · fuente: {source} · actualizado {when}",
+    ]
+    if master.dropped_verify_lines:
+        lines.append(
+            f"Ignoro {master.dropped_verify_lines} línea(s) marcadas [VERIFY] "
+            "hasta que las confirmes."
+        )
+    lines.append("")
+    lines.append(
+        "Con esto: <code>brecha &lt;id&gt;</code> compara tu perfil con una vacante, "
+        "<code>cv &lt;id&gt;</code> arma el CV a la medida."
+    )
+    return "\n".join(lines)
+
+
+def format_gap_analysis(lead: JobLead, gap: GapAnalysis) -> str:
+    verdict = _VERDICT_LABELS.get(gap.verdict, gap.verdict)
+    company = f" · {escape_text(lead.company)}" if lead.company else ""
+    lines = [
+        f"<b>Brecha · vacante #{lead.id} · {escape_text(compact_text(lead.title, 90))}"
+        f"{company}</b>",
+        f"<b>Veredicto:</b> {escape_text(verdict)}",
+        escape_text(gap.verdict_reason),
+        "",
+    ]
+    if gap.covered:
+        lines.append("<b>Lo que cubres</b>")
+        for item in gap.covered:
+            mark = _STRENGTH_MARKS.get(item.strength, "•")
+            lines.append(
+                f"{mark} {escape_text(compact_text(item.requirement, 90))}: "
+                f"{escape_text(compact_text(item.evidence, 200))}"
+            )
+        lines.append("")
+    if gap.missing:
+        lines.append("<b>Lo que no cubres</b>")
+        lines.extend(
+            f"❌ {escape_text(compact_text(item, 160))}" for item in gap.missing
+        )
+        lines.append("")
+    lines.append("<b>Qué poner primero</b>")
+    lines.extend(f"• {escape_text(item)}" for item in gap.foreground)
+    if gap.keywords_to_mirror:
+        lines.append("")
+        lines.append(
+            "Frases de la oferta que sí son ciertas de ti y conviene repetir: "
+            + escape_text(", ".join(gap.keywords_to_mirror))
+        )
+    lines.append("")
+    lines.append("<b>Apertura sugerida</b>")
+    lines.append(f"<pre>{escape_text(gap.opener)}</pre>")
+    lines.append("")
+    lines.append(
+        f"Siguiente: <code>cv {lead.id}</code> para el CV a la medida, "
+        f"<code>aplicado {lead.id}</code> cuando envíes."
+    )
+    return "\n".join(lines)
+
+
+def format_cv_caption(lead: JobLead) -> str:
+    company = f" · {escape_text(lead.company)}" if lead.company else ""
+    title = escape_text(compact_text(lead.title, 80))
+    return f"CV a la medida · vacante #{lead.id} · {title}{company}"
+
+
+def format_cv_delivered(
+    lead: JobLead,
+    cv: TailoredCV,
+    markdown: str,
+    *,
+    gap: GapAnalysis | None,
+    sent_as_file: bool,
+) -> str:
+    company = f" · {escape_text(lead.company)}" if lead.company else ""
+    lines = [
+        f"<b>CV a la medida · vacante #{lead.id} · "
+        f"{escape_text(compact_text(lead.title, 80))}{company}</b>",
+        f"Titular: {escape_text(cv.headline)}",
+    ]
+    if gap is not None:
+        lines.append(
+            "Veredicto de brecha: "
+            + escape_text(_VERDICT_LABELS.get(gap.verdict, gap.verdict))
+        )
+    lines.append("")
+    lines.append("<b>Notas de ajuste (para ti, no para ellos)</b>")
+    lines.append(escape_text(cv.tailoring_notes))
+    lines.append("")
+    if sent_as_file:
+        lines.append(
+            "El CV completo va como archivo Markdown en este chat. Revísalo, "
+            "corrige lo que no suene a ti y conviértelo a PDF antes de enviarlo."
+        )
+    else:
+        lines.append("No pude adjuntar el archivo; va el CV completo aquí:")
+        lines.append(f"<pre>{escape_text(markdown)}</pre>")
+    lines.append("")
+    lines.append(
+        "Regla de oro: todo lo que dice sale de tu CV maestro. Si ves algo que "
+        "no es cierto, el error está en el maestro; corrígelo ahí."
+    )
     return "\n".join(lines)

@@ -5,12 +5,18 @@ import aiosqlite
 
 from app.db.queries import insert_message
 from app.domain.message import Message
-from app.integrations.telegram_client import download_voice, send_message
+from app.integrations.telegram_client import (
+    download_file,
+    download_voice,
+    send_message,
+)
 from app.schemas.common import MessageType
 from app.schemas.telegram import TelegramMessage, TelegramUpdate
+from app.services import cv_tailor
 from app.services.classifier import MessageClassification, classify, classify_channel
 from app.services.telegram_orchestrator import handle_operator_text
 from app.services.transcription import get_transcriber
+from app.utils import telegram_formatting
 from app.utils.text import trim_to_boundary
 
 logger = logging.getLogger(__name__)
@@ -94,6 +100,34 @@ async def _attempt_transcription(voice_file_id: str) -> str | None:
 # ---------------------------------------------------------------------------
 
 
+def _is_cv_master_upload(msg: TelegramMessage) -> bool:
+    caption = (msg.caption or "").strip().lower().lstrip("/")
+    name = (msg.document.file_name or "").lower() if msg.document else ""
+    return caption.startswith("cv_master") or name.startswith("cv_master")
+
+
+async def _store_cv_master(db: aiosqlite.Connection, msg: TelegramMessage) -> str:
+    """Download a .md/.txt document sent with caption `cv_master` and store it."""
+    assert msg.document is not None
+    try:
+        raw = await download_file(msg.document.file_id)
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return (
+            "Ese archivo no es texto plano. Mándame el CV maestro como "
+            "<code>.md</code> o <code>.txt</code> con el caption "
+            "<code>cv_master</code>."
+        )
+    except Exception as exc:
+        logger.warning("CV master download failed: %s", exc)
+        return "No pude descargar el archivo desde Telegram. Inténtalo de nuevo."
+    try:
+        master = await cv_tailor.save_master(db, text)
+    except ValueError as exc:
+        return escape(str(exc), quote=False)
+    return telegram_formatting.format_cv_master_status(master, just_saved=True)
+
+
 async def handle_update(
     update: TelegramUpdate,
     db: aiosqlite.Connection,
@@ -153,6 +187,10 @@ async def handle_update(
             msg.chat.id,
             msg.message_id,
         )
+        return
+
+    if msg.document is not None and _is_cv_master_upload(msg):
+        await send_message(msg.chat.id, await _store_cv_master(db, msg))
         return
 
     incoming_text = msg.text or msg.caption

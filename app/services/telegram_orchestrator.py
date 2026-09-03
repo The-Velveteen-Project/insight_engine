@@ -28,6 +28,7 @@ from app.db.queries import (
     reset_editorial_tables,
     upsert_telegram_session,
 )
+from app.integrations.telegram_client import send_document
 from app.schemas.commands import (
     CommandName,
     MvpIdeaSuggestion,
@@ -52,6 +53,7 @@ from app.schemas.jobs import JobStatus
 from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services import (
     active_goals,
+    cv_tailor,
     diagnostics,
     discovery_service,
     draft_generator,
@@ -190,6 +192,18 @@ _PIPELINE_RE = re.compile(
     r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)\s*[?¿!]*\s*$",
     re.I,
 )
+_GAP_RE = re.compile(
+    r"^(?:analiza(?:me)?\s+|mira\s+|dame\s+)?"
+    r"(?:mi\s+|la\s+|el\s+)?(?:brecha|fit|gap|ajuste)\s+"
+    r"(?:con\s+|de\s+|para\s+)?(?:la\s+)?(?:vacante\s+|lead\s+)?#?(?P<id>\d+)\s*[?¿!]*\s*$",
+    re.I,
+)
+_CV_RE = re.compile(
+    r"^(?:arma(?:me)?\s+|hazme\s+|dame\s+|genera(?:me)?\s+|prepara(?:me)?\s+)?"
+    r"(?:el\s+|un\s+)?cv\s+(?:para\s+|de\s+|con\s+)?(?:la\s+)?(?:vacante\s+|lead\s+)?"
+    r"#?(?P<id>\d+)\s*[?¿!]*\s*$",
+    re.I,
+)
 _LEAD_DETAIL_RE = re.compile(
     r"^(?:mu[eé]strame\s+|dame\s+|detalle\s+(?:de\s+)?|ver\s+)?"
     r"(?:la\s+)?(?:vacante|lead|oferta)\s+#?(?P<id>\d+)\s*[?¿!]*\s*$",
@@ -282,6 +296,11 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "pipeline": CommandName.PIPELINE,
     "vacante": CommandName.LEAD_DETAIL,
     "lead": CommandName.LEAD_DETAIL,
+    "brecha": CommandName.GAP,
+    "gap": CommandName.GAP,
+    "fit": CommandName.GAP,
+    "cv": CommandName.CV,
+    "cv_master": CommandName.CV_MASTER,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -825,6 +844,16 @@ def _natural_command(
             name=CommandName.PIPELINE,
             query=None,
             raw_text=text,
+        )
+    gap_match = _GAP_RE.match(stripped)
+    if gap_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.GAP, query=gap_match.group("id"), raw_text=text
+        )
+    cv_match = _CV_RE.match(stripped)
+    if cv_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.CV, query=cv_match.group("id"), raw_text=text
         )
     detail_match = _LEAD_DETAIL_RE.match(stripped)
     if detail_match is not None:
@@ -1910,6 +1939,56 @@ async def handle_command(
     if command.name == CommandName.PIPELINE:
         grouped = await job_radar.pipeline(db)
         return telegram_formatting.format_pipeline(grouped)
+
+    if command.name == CommandName.CV_MASTER:
+        try:
+            master = await cv_tailor.load_master(db)
+        except cv_tailor.MasterCVMissing:
+            return telegram_formatting.format_cv_master_missing()
+        return telegram_formatting.format_cv_master_status(master, just_saved=False)
+
+    if command.name == CommandName.GAP:
+        lead_id, _ = _parse_lead_args(command.query or "")
+        if lead_id is None:
+            return "<b>Uso:</b> <code>brecha &lt;id&gt;</code>"
+        try:
+            lead, gap = await cv_tailor.analyze_gap(db, lead_id)
+        except cv_tailor.MasterCVMissing:
+            return telegram_formatting.format_cv_master_missing()
+        except LookupError:
+            return _not_found("Vacante", lead_id)
+        except RuntimeError as exc:
+            detail = telegram_formatting.escape_text(str(exc))
+            return f"No pude analizar la brecha: {detail}"
+        return telegram_formatting.format_gap_analysis(lead, gap)
+
+    if command.name == CommandName.CV:
+        lead_id, _ = _parse_lead_args(command.query or "")
+        if lead_id is None:
+            return "<b>Uso:</b> <code>cv &lt;id&gt;</code>"
+        try:
+            lead, cv, markdown, cv_gap = await cv_tailor.tailor_cv(db, lead_id)
+        except cv_tailor.MasterCVMissing:
+            return telegram_formatting.format_cv_master_missing()
+        except LookupError:
+            return _not_found("Vacante", lead_id)
+        except RuntimeError as exc:
+            return f"No pude armar el CV: {telegram_formatting.escape_text(str(exc))}"
+        sent_as_file = False
+        if chat_id is not None:
+            try:
+                await send_document(
+                    chat_id,
+                    filename=cv_tailor.cv_filename(lead),
+                    content=markdown.encode("utf-8"),
+                    caption=telegram_formatting.format_cv_caption(lead),
+                )
+                sent_as_file = True
+            except Exception as exc:
+                logger.warning("CV document send failed for lead %s: %s", lead_id, exc)
+        return telegram_formatting.format_cv_delivered(
+            lead, cv, markdown, gap=cv_gap, sent_as_file=sent_as_file
+        )
 
     if command.name == CommandName.LEAD_DETAIL:
         lead_id, _ = _parse_lead_args(command.query or "")

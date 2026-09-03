@@ -32,6 +32,7 @@ from app.prompts.handoff_match import (
     build_handoff_match_prompt,
 )
 from app.prompts.job_details import JOB_DETAILS_SYSTEM_PROMPT, build_job_details_prompt
+from app.schemas.cv import GapAnalysis, TailoredCV
 from app.schemas.drafts import DraftGenerationInput, EditorialDraftContent
 from app.schemas.editorial import (
     EditorialGenerationInput,
@@ -298,6 +299,74 @@ class OpenAIJobDetailsExtractor:
             max_tokens=900,
             temperature=0,
         )
+
+
+class OpenAIGapAnalyst:
+    """Master CV + posting -> GapAnalysis (judgment over supplied facts)."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: float) -> None:
+        self._client = build_async_openai_client(
+            api_key=api_key, timeout_seconds=timeout_seconds
+        )
+        self._model = model
+
+    async def generate(self, *, system: str, user: str) -> GapAnalysis | None:
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=system,
+            user=user,
+            response_cls=GapAnalysis,
+            max_tokens=1400,
+            temperature=0.2,
+        )
+
+
+class OpenAICVWriter:
+    """Master CV + posting -> TailoredCV (selection and rephrasing only)."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: float) -> None:
+        self._client = build_async_openai_client(
+            api_key=api_key, timeout_seconds=timeout_seconds
+        )
+        self._model = model
+
+    async def generate(self, *, system: str, user: str) -> TailoredCV | None:
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=system,
+            user=user,
+            response_cls=TailoredCV,
+            max_tokens=2600,
+            temperature=0.3,
+        )
+
+
+_gap_analyst: OpenAIGapAnalyst | None = None
+_cv_writer: OpenAICVWriter | None = None
+
+
+def get_gap_analyst() -> OpenAIGapAnalyst | None:
+    global _gap_analyst
+    if _gap_analyst is None and settings.openai_api_key:
+        _gap_analyst = OpenAIGapAnalyst(
+            api_key=settings.openai_api_key,
+            model=settings.editorial_model,
+            timeout_seconds=settings.cv_timeout_seconds,
+        )
+    return _gap_analyst
+
+
+def get_cv_writer() -> OpenAICVWriter | None:
+    global _cv_writer
+    if _cv_writer is None and settings.openai_api_key:
+        _cv_writer = OpenAICVWriter(
+            api_key=settings.openai_api_key,
+            model=settings.editorial_model,
+            timeout_seconds=settings.cv_timeout_seconds,
+        )
+    return _cv_writer
 
 
 _job_details_extractor: OpenAIJobDetailsExtractor | None = None

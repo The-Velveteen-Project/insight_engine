@@ -149,6 +149,45 @@ async def send_message(
             )
 
 
+async def send_document(
+    chat_id: int,
+    *,
+    filename: str,
+    content: bytes,
+    caption: str | None = None,
+    mime_type: str = "text/markdown",
+) -> None:
+    """Upload a small file to the chat (used for tailored CVs)."""
+    data: dict[str, str] = {"chat_id": str(chat_id)}
+    if caption:
+        data["caption"] = caption[:1024]
+        data["parse_mode"] = "HTML"
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{_base()}/sendDocument",
+            data=data,
+            files={"document": (filename, content, mime_type)},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+
+
+async def download_file(file_id: str, *, max_bytes: int = 2_000_000) -> bytes:
+    """Resolve a Telegram file_id and return its bytes (bounded)."""
+    file_meta = await get_file(file_id)
+    file_path = file_meta.get("file_path", "")
+    if not file_path:
+        raise RuntimeError(f"Telegram returned no file_path for file_id={file_id!r}")
+    url = f"https://api.telegram.org/file/bot{settings.telegram_bot_token}/{file_path}"
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, timeout=30.0)
+        response.raise_for_status()
+    content = response.content
+    if len(content) > max_bytes:
+        raise RuntimeError("El archivo supera el tamaño máximo permitido.")
+    return content
+
+
 async def get_file(file_id: str) -> dict[str, Any]:
     """Returns the file metadata object from Telegram. Use file_path to download."""
     async with httpx.AsyncClient() as client:

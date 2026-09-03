@@ -1025,6 +1025,51 @@ async def list_job_leads_pending_enrichment(
     return list(await cursor.fetchall())
 
 
+async def get_job_lead_posting_text(
+    db: aiosqlite.Connection, lead_id: int
+) -> str | None:
+    cursor = await db.execute(
+        "SELECT posting_text FROM job_leads WHERE id = ?", (lead_id,)
+    )
+    row = await cursor.fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
+async def set_job_lead_gap(
+    db: aiosqlite.Connection, *, lead_id: int, gap_json: str
+) -> None:
+    await db.execute(
+        "UPDATE job_leads SET gap_json = ?, updated_at = CURRENT_TIMESTAMP"
+        " WHERE id = ?",
+        (gap_json, lead_id),
+    )
+    await db.commit()
+
+
+async def set_job_lead_cv(
+    db: aiosqlite.Connection, *, lead_id: int, cv_markdown: str, generated_at: str
+) -> None:
+    await db.execute(
+        """
+        UPDATE job_leads
+        SET cv_markdown = ?, cv_generated_at = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (cv_markdown, generated_at, lead_id),
+    )
+    await db.commit()
+
+
+async def get_job_lead_gap_json(db: aiosqlite.Connection, lead_id: int) -> str | None:
+    cursor = await db.execute("SELECT gap_json FROM job_leads WHERE id = ?", (lead_id,))
+    row = await cursor.fetchone()
+    if row is None or row[0] is None:
+        return None
+    return str(row[0])
+
+
 async def count_job_leads_by_status(db: aiosqlite.Connection) -> dict[str, int]:
     cursor = await db.execute("SELECT status, COUNT(*) FROM job_leads GROUP BY status")
     rows = await cursor.fetchall()

@@ -233,6 +233,10 @@ _MIGRATIONS: list[str] = [
     "ALTER TABLE job_leads ADD COLUMN country TEXT",
     "ALTER TABLE job_leads ADD COLUMN remote_policy TEXT",
     "ALTER TABLE job_leads ADD COLUMN enriched_at TIMESTAMP",
+    # Phase 2.6: gap analysis and tailored CV per lead.
+    "ALTER TABLE job_leads ADD COLUMN gap_json TEXT",
+    "ALTER TABLE job_leads ADD COLUMN cv_markdown TEXT",
+    "ALTER TABLE job_leads ADD COLUMN cv_generated_at TIMESTAMP",
 ]
 
 _CREATE_INDEXES = [
