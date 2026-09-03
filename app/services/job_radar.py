@@ -20,7 +20,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import aiosqlite
 
@@ -52,6 +52,13 @@ _ROLE_TERMS: dict[str, float] = {
     "machine learning engineer": 0.25,
     "ml engineer": 0.25,
     "ai engineer": 0.2,
+    "ai scientist": 0.3,
+    "machine learning scientist": 0.35,
+    "ml scientist": 0.35,
+    "research fellow": 0.3,
+    "member of technical staff": 0.3,
+    "scientist, machine learning": 0.35,
+    "forward deployed engineer": 0.15,
     "ml researcher": 0.3,
     "ai researcher": 0.3,
     "computational biologist": 0.25,
@@ -185,9 +192,47 @@ def company_from_url(url: str) -> str | None:
         if host == board_host:
             match = pattern.match(parts.path)
             if match:
-                slug = match.group(1)
-                return slug.replace("-", " ").replace("_", " ").strip().title()
+                return _company_from_slug(match.group(1))
     return None
+
+
+_ACRONYM_TOKENS = {"ai", "ml", "llm", "nlp", "hq", "io", "us", "uk", "eu"}
+
+
+def _company_from_slug(slug: str) -> str | None:
+    """ "hippocratic%20ai" -> "Hippocratic AI", "mistral.ai" -> "Mistral AI"."""
+    decoded = unquote(slug)
+    tokens = [t for t in re.split(r"[\s\-_.+]+", decoded) if t]
+    cleaned: list[str] = []
+    for token in tokens:
+        lowered = token.lower()
+        if lowered in _ACRONYM_TOKENS:
+            cleaned.append(lowered.upper())
+        elif any(ch.isupper() for ch in token[1:]):
+            cleaned.append(token)  # already cased by the board (e.g. DeepMind)
+        else:
+            cleaned.append(token.capitalize())
+    return " ".join(cleaned) or None
+
+
+# Job-board hosts where only some paths are postings. Everything else on the
+# host (people profiles, company pages, feeds) is noise for the radar.
+_PATH_REQUIRED: dict[str, tuple[str, ...]] = {
+    "linkedin.com": ("/jobs/",),
+    "www.linkedin.com": ("/jobs/",),
+    "wellfound.com": ("/jobs", "/l/"),
+    "news.ycombinator.com": ("/item",),
+    "www.ycombinator.com": ("/companies", "/jobs"),
+}
+
+
+def looks_like_job_posting(url: str) -> bool:
+    parts = urlsplit(url)
+    host = parts.netloc.lower()
+    required = _PATH_REQUIRED.get(host)
+    if required is None:
+        return True
+    return any(parts.path.startswith(prefix) for prefix in required)
 
 
 def split_title_company(title: str) -> tuple[str, str | None]:
@@ -257,7 +302,7 @@ def score_fit(
 def candidate_from_exa(result: exa_client.ExaResultDict) -> JobLeadCandidate | None:
     raw_title = (result.get("title") or "").strip()
     url = (result.get("url") or "").strip()
-    if not raw_title or not url:
+    if not raw_title or not url or not looks_like_job_posting(url):
         return None
     title, company_from_title = split_title_company(raw_title)
     company = company_from_url(url) or company_from_title

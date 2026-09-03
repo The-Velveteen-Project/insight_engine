@@ -208,3 +208,41 @@ async def test_radar_shows_best_discarded_when_nothing_passes(
     assert "Lo mejor de lo que descarté" in text
     assert "Marketing Manager" in text
     assert_valid_telegram_html(text)
+
+
+def test_company_slug_decoding_and_person_profiles_filtered() -> None:
+    assert (
+        job_radar.company_from_url(
+            "https://boards.greenhouse.io/hippocratic%20ai/jobs/1"
+        )
+        == "Hippocratic AI"
+    )
+    assert job_radar.company_from_url("https://jobs.lever.co/mistral.ai/2") == (
+        "Mistral AI"
+    )
+    assert job_radar.company_from_url("https://jobs.ashbyhq.com/DeepMind/3") == (
+        "DeepMind"
+    )
+    assert job_radar.looks_like_job_posting("https://www.linkedin.com/in/someone/") is (
+        False
+    )
+    assert job_radar.looks_like_job_posting("https://www.linkedin.com/jobs/view/1") is (
+        True
+    )
+    assert job_radar.looks_like_job_posting(
+        "https://boards.greenhouse.io/x/jobs/1"
+    ) is (True)
+    assert (
+        job_radar.candidate_from_exa(
+            {
+                "id": "p",
+                "title": "Abhishek Gupta",
+                "url": "https://www.linkedin.com/in/ag/",
+            }
+        )
+        is None
+    )
+    score, _, _ = job_radar.score_fit(
+        title="AI Scientist", summary="", company="Mistral AI"
+    )
+    assert score >= 0.45
