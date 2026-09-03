@@ -146,6 +146,40 @@ CREATE TABLE IF NOT EXISTS pending_handoff_followups (
 )
 """
 
+# Phase 1 (career manager): every LinkedIn post the operator generates is
+# recorded, and Carlos marks the ones he actually publishes. This is the
+# only honest basis for cadence: "did a post go live this week", not
+# "how many drafts exist".
+_CREATE_LINKEDIN_POSTS = """
+CREATE TABLE IF NOT EXISTS linkedin_posts (
+    id            INTEGER   PRIMARY KEY AUTOINCREMENT,
+    plan_id       INTEGER   REFERENCES editorial_plans(id),
+    goal_id       INTEGER   REFERENCES active_goals(id),
+    chat_id       INTEGER,
+    body          TEXT      NOT NULL,
+    hook          TEXT,
+    language      TEXT      NOT NULL DEFAULT 'es',
+    llm_used      BOOLEAN   NOT NULL DEFAULT 0,
+    model         TEXT,
+    opinion_used  BOOLEAN   NOT NULL DEFAULT 0,
+    status        TEXT      NOT NULL DEFAULT 'generated'
+                            CHECK (status IN ('generated', 'published', 'discarded')),
+    published_url TEXT,
+    published_at  TIMESTAMP,
+    created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+# Small key/value store for operator bookkeeping (last cadence reminder, etc.).
+_CREATE_OPERATOR_STATE = """
+CREATE TABLE IF NOT EXISTS operator_state (
+    key        TEXT      PRIMARY KEY,
+    value      TEXT      NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 # Idempotent migrations — ALTER TABLE ADD COLUMN is a no-op if the column
 # already exists (OperationalError is caught and silenced in _migrate).
 _MIGRATIONS: list[str] = [
@@ -160,6 +194,8 @@ _MIGRATIONS: list[str] = [
     " REFERENCES active_goals(id)",
     "ALTER TABLE editorial_drafts ADD COLUMN goal_id INTEGER"
     " REFERENCES active_goals(id)",
+    # Phase 1: remember the last generated post per chat so "publicado" works.
+    "ALTER TABLE telegram_sessions ADD COLUMN last_post_id INTEGER",
 ]
 
 _CREATE_INDEXES = [
@@ -183,6 +219,10 @@ _CREATE_INDEXES = [
     " ON active_goals(archived_at)",
     "CREATE INDEX IF NOT EXISTS idx_pending_handoff_followups_due"
     " ON pending_handoff_followups(status, due_at)",
+    "CREATE INDEX IF NOT EXISTS idx_linkedin_posts_status_published"
+    " ON linkedin_posts(status, published_at)",
+    "CREATE INDEX IF NOT EXISTS idx_linkedin_posts_chat_created"
+    " ON linkedin_posts(chat_id, created_at)",
 ]
 
 
@@ -209,6 +249,8 @@ async def init_db() -> None:
         await db.execute(_CREATE_TELEGRAM_SESSIONS)
         await db.execute(_CREATE_ACTIVE_GOALS)
         await db.execute(_CREATE_HANDOFF_FOLLOWUPS)
+        await db.execute(_CREATE_LINKEDIN_POSTS)
+        await db.execute(_CREATE_OPERATOR_STATE)
         for stmt in _CREATE_INDEXES:
             await db.execute(stmt)
         await _migrate(db)

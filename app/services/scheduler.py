@@ -18,7 +18,7 @@ import aiosqlite
 
 from app.core.config import settings
 from app.integrations.telegram_client import send_message
-from app.services import telegram_orchestrator
+from app.services import post_ledger, telegram_orchestrator
 from app.utils import telegram_formatting
 
 logger = logging.getLogger(__name__)
@@ -117,6 +117,22 @@ async def run_weekly_mvp_scan_job() -> None:
         )
 
     text = telegram_formatting.format_mvp_idea(idea)
+    await send_message(settings.telegram_admin_chat_id, text)
+
+
+async def run_cadence_reminder_job() -> None:
+    """Send the cadence reminder when it is due. Silent otherwise."""
+    if settings.telegram_admin_chat_id <= 0:
+        logger.info("Cadence reminder skipped: TELEGRAM_ADMIN_CHAT_ID not configured.")
+        return
+
+    async with aiosqlite.connect(settings.db_path) as db:
+        db.row_factory = aiosqlite.Row
+        text = await post_ledger.build_cadence_reminder(db)
+
+    if text is None:
+        logger.info("Cadence reminder not due: target met or reminded recently.")
+        return
     await send_message(settings.telegram_admin_chat_id, text)
 
 

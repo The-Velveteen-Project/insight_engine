@@ -15,7 +15,11 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.services.handoff_followups import process_due_followups
-from app.services.scheduler import run_weekly_mvp_scan_job, run_weekly_summary_job
+from app.services.scheduler import (
+    run_cadence_reminder_job,
+    run_weekly_mvp_scan_job,
+    run_weekly_summary_job,
+)
 
 router = APIRouter(tags=["internal"])
 
@@ -56,6 +60,15 @@ async def run_mvp_scan(
     _require_internal_token(x_internal_token)
     await run_weekly_mvp_scan_job()
     return InternalJobResponse(status="ok", job="weekly_mvp_scan")
+
+
+@router.post("/run-cadence-check", response_model=InternalJobResponse)
+async def run_cadence_check(
+    x_internal_token: Annotated[str | None, Header()] = None,
+) -> InternalJobResponse:
+    _require_internal_token(x_internal_token)
+    await run_cadence_reminder_job()
+    return InternalJobResponse(status="ok", job="cadence_check")
 
 
 @router.post("/process-handoff-followups", response_model=InternalJobResponse)

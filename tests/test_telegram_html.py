@@ -140,3 +140,42 @@ def test_trim_to_boundary_never_uses_ellipsis() -> None:
     assert trim_to_boundary("palabra " * 50, 40).endswith("palabra")
     assert trim_to_boundary("x" * 300, 50) == "x" * 50
     assert trim_to_boundary(None, 50) == ""
+
+
+def test_phase1_formatters_are_valid_html() -> None:
+    from datetime import UTC, datetime
+
+    from app.schemas.linkedin import LinkedInPostRecord, PostStatus
+    from app.services.post_ledger import CadenceStatus, PublishResult
+
+    record = LinkedInPostRecord(
+        id=1,
+        plan_id=3,
+        goal_id=None,
+        chat_id=1,
+        body="Cuerpo con <angulos> & ampersand.",
+        hook="Hook con <tags> & símbolos",
+        language="es",
+        llm_used=True,
+        model="gpt-5.6-luna",
+        opinion_used=False,
+        status=PostStatus.PUBLISHED,
+        published_url="https://www.linkedin.com/posts/x?a=1&b=2",
+        published_at=datetime(2026, 9, 3, tzinfo=UTC),
+        created_at=datetime(2026, 9, 3, tzinfo=UTC),
+    )
+    pending = record.model_copy(update={"id": 2, "status": PostStatus.GENERATED})
+    cadence = CadenceStatus(
+        published_last_7d=1,
+        target_per_week=2,
+        last_published_at=record.published_at,
+        unpublished=[pending],
+    )
+    assert_valid_telegram_html(
+        fmt.format_published_ack(
+            PublishResult(record=record, created_manual=False), cadence
+        )
+    )
+    assert_valid_telegram_html(fmt.format_posts_list([record, pending], cadence))
+    assert_valid_telegram_html(fmt.format_cadence_reminder(cadence))
+    assert_valid_telegram_html(fmt.format_reset_done({"signals": 3}))

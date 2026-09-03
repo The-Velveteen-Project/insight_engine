@@ -606,6 +606,7 @@ async def upsert_telegram_session(
     last_draft_id: int | None,
     pending_command: str | None,
     pending_target_id: int | None,
+    last_post_id: int | None = None,
 ) -> None:
     await db.execute(
         """
@@ -616,14 +617,16 @@ async def upsert_telegram_session(
             last_draft_id,
             pending_command,
             pending_target_id,
+            last_post_id,
             updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         ON CONFLICT(chat_id) DO UPDATE SET
             last_signal_ids = excluded.last_signal_ids,
             last_plan_id = excluded.last_plan_id,
             last_draft_id = excluded.last_draft_id,
             pending_command = excluded.pending_command,
             pending_target_id = excluded.pending_target_id,
+            last_post_id = excluded.last_post_id,
             updated_at = CURRENT_TIMESTAMP
         """,
         (
@@ -633,6 +636,204 @@ async def upsert_telegram_session(
             last_draft_id,
             pending_command,
             pending_target_id,
+            last_post_id,
         ),
     )
     await db.commit()
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn post ledger (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+async def insert_linkedin_post(
+    db: aiosqlite.Connection,
+    *,
+    plan_id: int | None,
+    goal_id: int | None,
+    chat_id: int | None,
+    body: str,
+    hook: str | None,
+    language: str,
+    llm_used: bool,
+    model: str | None,
+    opinion_used: bool,
+    status: str = "generated",
+    published_url: str | None = None,
+    published_at: str | None = None,
+) -> int:
+    cursor = await db.execute(
+        """
+        INSERT INTO linkedin_posts (
+            plan_id, goal_id, chat_id, body, hook, language, llm_used, model,
+            opinion_used, status, published_url, published_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            plan_id,
+            goal_id,
+            chat_id,
+            body,
+            hook,
+            language,
+            int(llm_used),
+            model,
+            int(opinion_used),
+            status,
+            published_url,
+            published_at,
+        ),
+    )
+    await db.commit()
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+async def get_linkedin_post_by_id(
+    db: aiosqlite.Connection, post_id: int
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        "SELECT * FROM linkedin_posts WHERE id = ?",
+        (post_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def get_latest_generated_linkedin_post(
+    db: aiosqlite.Connection,
+    *,
+    chat_id: int | None,
+) -> aiosqlite.Row | None:
+    if chat_id is None:
+        cursor = await db.execute(
+            """
+            SELECT * FROM linkedin_posts
+            WHERE status = 'generated'
+            ORDER BY id DESC LIMIT 1
+            """
+        )
+    else:
+        cursor = await db.execute(
+            """
+            SELECT * FROM linkedin_posts
+            WHERE status = 'generated' AND chat_id = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (chat_id,),
+        )
+    return await cursor.fetchone()
+
+
+async def mark_linkedin_post_published(
+    db: aiosqlite.Connection,
+    *,
+    post_id: int,
+    published_url: str | None,
+    published_at: str,
+) -> bool:
+    cursor = await db.execute(
+        """
+        UPDATE linkedin_posts
+        SET status = 'published',
+            published_url = COALESCE(?, published_url),
+            published_at = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (published_url, published_at, post_id),
+    )
+    await db.commit()
+    return bool(cursor.rowcount)
+
+
+async def get_recent_linkedin_posts(
+    db: aiosqlite.Connection,
+    *,
+    limit: int = 8,
+    status: str | None = None,
+) -> list[aiosqlite.Row]:
+    if status is None:
+        cursor = await db.execute(
+            "SELECT * FROM linkedin_posts ORDER BY id DESC LIMIT ?",
+            (limit,),
+        )
+    else:
+        cursor = await db.execute(
+            "SELECT * FROM linkedin_posts WHERE status = ? ORDER BY id DESC LIMIT ?",
+            (status, limit),
+        )
+    return list(await cursor.fetchall())
+
+
+async def count_linkedin_posts_published_since(
+    db: aiosqlite.Connection, since: str
+) -> int:
+    cursor = await db.execute(
+        """
+        SELECT COUNT(*) FROM linkedin_posts
+        WHERE status = 'published' AND published_at >= ?
+        """,
+        (since,),
+    )
+    row = await cursor.fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+async def get_last_published_at(db: aiosqlite.Connection) -> str | None:
+    cursor = await db.execute(
+        "SELECT MAX(published_at) FROM linkedin_posts WHERE status = 'published'"
+    )
+    row = await cursor.fetchone()
+    value = row[0] if row is not None else None
+    return str(value) if value else None
+
+
+async def get_operator_state(db: aiosqlite.Connection, key: str) -> str | None:
+    cursor = await db.execute("SELECT value FROM operator_state WHERE key = ?", (key,))
+    row = await cursor.fetchone()
+    return str(row[0]) if row is not None else None
+
+
+async def set_operator_state(db: aiosqlite.Connection, key: str, value: str) -> None:
+    await db.execute(
+        """
+        INSERT INTO operator_state (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            value = excluded.value,
+            updated_at = CURRENT_TIMESTAMP
+        """,
+        (key, value),
+    )
+    await db.commit()
+
+
+# Children before parents so foreign keys never block the wipe.
+_RESETTABLE_TABLES: tuple[str, ...] = (
+    "linkedin_posts",
+    "pending_handoff_followups",
+    "editorial_drafts",
+    "editorial_plans",
+    "signals",
+    "messages",
+    "telegram_sessions",
+)
+
+
+async def reset_editorial_tables(db: aiosqlite.Connection) -> dict[str, int]:
+    """Empty every editorial table and restart their ids at 1.
+
+    Explicitly requested by Carlos to start the ledger from plan #1. Goals
+    and operator_state survive: they describe him, not the work.
+    """
+    counts: dict[str, int] = {}
+    for table in _RESETTABLE_TABLES:
+        cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+        row = await cursor.fetchone()
+        counts[table] = int(row[0]) if row is not None else 0
+        await db.execute(f"DELETE FROM {table}")  # noqa: S608
+        await db.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
+    await db.commit()
+    return counts

@@ -1,0 +1,24 @@
+name: Cadence Reminder
+
+on:
+  schedule:
+    # Tuesdays and Thursdays at 13:00 UTC (08:00 in Colombia). The endpoint
+    # only sends a message when the weekly publishing target is not met and
+    # no reminder went out recently, so most runs are silent.
+    - cron: "0 13 * * 2,4"
+  workflow_dispatch:
+
+jobs:
+  cadence-check:
+    name: Cadence Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger cadence check
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/run-cadence-check" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 120
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}

@@ -13,9 +13,37 @@ posting, and the manual paste path is the right shape at this scale.
 
 from __future__ import annotations
 
+from datetime import datetime
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
 
 from app.schemas.editorial import EditorialSignalContext, RecommendedAction
+
+
+class PostStatus(StrEnum):
+    GENERATED = "generated"
+    PUBLISHED = "published"
+    DISCARDED = "discarded"
+
+
+class LinkedInPostRecord(BaseModel):
+    """A row of the post ledger: what was generated and whether it went live."""
+
+    id: int
+    plan_id: int | None
+    goal_id: int | None
+    chat_id: int | None
+    body: str
+    hook: str | None
+    language: str
+    llm_used: bool
+    model: str | None
+    opinion_used: bool
+    status: PostStatus
+    published_url: str | None
+    published_at: datetime | None
+    created_at: datetime
 
 
 class LinkedInPost(BaseModel):
@@ -35,6 +63,22 @@ class LinkedInPost(BaseModel):
     body_paragraphs: list[str] = Field(min_length=2, max_length=6)
     closing: str = Field(min_length=10, max_length=320)
     hashtags: list[str] = Field(min_length=0, max_length=6)
+
+    def assembled_body(self) -> str:
+        """Hook + paragraphs + closing + hashtags, exactly as pasted into LinkedIn.
+
+        Blank lines between paragraphs are preserved so Telegram and LinkedIn
+        render the same shape. Hashtags are normalized to a single leading #.
+        """
+        sections: list[str] = [self.hook.strip(), ""]
+        for paragraph in self.body_paragraphs:
+            sections.append(paragraph.strip())
+            sections.append("")
+        sections.append(self.closing.strip())
+        if self.hashtags:
+            tag_line = " ".join(f"#{tag.strip().lstrip('#')}" for tag in self.hashtags)
+            sections.extend(["", tag_line])
+        return "\n".join(sections).strip()
 
 
 class LinkedInPostInput(BaseModel):

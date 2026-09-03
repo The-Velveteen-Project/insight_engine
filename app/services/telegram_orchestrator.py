@@ -25,6 +25,7 @@ from app.db.queries import (
     get_signal_by_source_identity,
     get_signals_by_ids,
     get_telegram_session,
+    reset_editorial_tables,
     upsert_telegram_session,
 )
 from app.schemas.commands import (
@@ -58,6 +59,7 @@ from app.services import (
     handoff_followups,
     linkedin_writer,
     mvp_handoff,
+    post_ledger,
 )
 from app.services.generation import get_weekly_thesis_generator
 from app.utils import telegram_formatting
@@ -170,6 +172,19 @@ _DISMISS_FOLLOWUP_RE = re.compile(
     r"dejalo|déjalo|cancelar|cancela|nada|nope)\s*$",
     re.I,
 )
+_PUBLISHED_RE = re.compile(
+    r"^(?:ya\s+)?(?:lo\s+|la\s+)?"
+    r"(?:publiqu[eé]|public[oó]|poste[eé]|publicado|posteado|"
+    r"est[aá]\s+(?:publicado|arriba|en\s+linkedin))"
+    r"(?P<rest>.*)$",
+    re.I,
+)
+_POSTS_RE = re.compile(
+    r"^(?:mis\s+posts|posts|qu[eé]\s+he\s+publicado|"
+    r"historial(?:\s+de\s+posts)?|c[oó]mo\s+voy\s+con\s+los\s+posts)"
+    r"\s*[?¿!]*\s*$",
+    re.I,
+)
 _GOAL_QUERY_RE = re.compile(
     r"^(?:cual es mi goal|cuál es mi goal|"
     r"muestrame mi goal|muéstrame mi goal|mi goal)\s*$",
@@ -225,6 +240,11 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "linkedin_prompt": CommandName.LINKEDIN_PROMPT,
     "opinion": CommandName.OPINION,
     "diag": CommandName.DIAG,
+    "publicado": CommandName.PUBLISHED,
+    "publiqué": CommandName.PUBLISHED,
+    "publique": CommandName.PUBLISHED,
+    "posts": CommandName.POSTS,
+    "reset_editorial": CommandName.RESET_EDITORIAL,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -281,6 +301,7 @@ class _ChatState:
     last_draft_id: int | None = None
     pending_command: CommandName | None = None
     pending_target_id: int | None = None
+    last_post_id: int | None = None
 
 
 _CHAT_STATE: dict[int, _ChatState] = {}
@@ -422,8 +443,10 @@ def _state_from_row(row: aiosqlite.Row) -> _ChatState:
         except ValueError:
             pending_command = None
 
+    last_post_raw = row["last_post_id"] if "last_post_id" in row.keys() else None
     return _ChatState(
         last_signal_ids=signal_ids,
+        last_post_id=int(last_post_raw) if last_post_raw is not None else None,
         last_plan_id=int(row["last_plan_id"])
         if row["last_plan_id"] is not None
         else None,
@@ -474,7 +497,30 @@ async def _persist_state(
             state.pending_command.value if state.pending_command is not None else None
         ),
         pending_target_id=state.pending_target_id,
+        last_post_id=state.last_post_id,
     )
+
+
+def _remember_post(chat_id: int | None, post_id: int | None) -> None:
+    state = _get_state(chat_id)
+    if state is None:
+        return
+    state.last_post_id = post_id
+
+
+def _parse_published_args(query: str) -> tuple[str | None, int | None]:
+    """Split "publicado <url> <#id>" into (url, post_id); either may be absent."""
+    url: str | None = None
+    post_id: int | None = None
+    for token in query.split():
+        cleaned = token.strip("<>()[],")
+        if url is None and cleaned.lower().startswith(("http://", "https://")):
+            url = cleaned
+            continue
+        digits = cleaned.lstrip("#")
+        if post_id is None and digits.isdigit():
+            post_id = int(digits)
+    return url, post_id
 
 
 def _set_pending(
@@ -711,6 +757,19 @@ def _natural_command(
                 query=None,
                 raw_text=text,
             )
+    published_match = _PUBLISHED_RE.match(stripped)
+    if published_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.PUBLISHED,
+            query=published_match.group("rest").strip() or None,
+            raw_text=text,
+        )
+    if _POSTS_RE.match(lowered):
+        return ParsedTelegramCommand(
+            name=CommandName.POSTS,
+            query=None,
+            raw_text=text,
+        )
     if _GOAL_QUERY_RE.match(lowered):
         return ParsedTelegramCommand(
             name=CommandName.GOAL,
@@ -1234,7 +1293,7 @@ def _deterministic_weekly_thesis(
         repos_hint = ", ".join(own_repo_names) if own_repo_names else "tus repos"
         opener = (
             f"Esta semana hay convergencia real: lo que mueves en {repos_hint} "
-            f"se cruza con material externo (\"{external_hint}\") sobre {focus}. "
+            f'se cruza con material externo ("{external_hint}") sobre {focus}. '
             "Vale la pena tratarlos como un solo movimiento editorial, no como "
             "tres signals sueltas."
         )
@@ -1345,12 +1404,8 @@ def _balanced_weekly_selection(
     overall score across what's left. This stops github from drowning out
     external work just because his own repos accumulate artifact bonuses.
     """
-    sorted_external = sorted(
-        external, key=lambda c: c.relevance_score, reverse=True
-    )
-    sorted_github = sorted(
-        github_refs, key=lambda c: c.relevance_score, reverse=True
-    )
+    sorted_external = sorted(external, key=lambda c: c.relevance_score, reverse=True)
+    sorted_github = sorted(github_refs, key=lambda c: c.relevance_score, reverse=True)
     selected: list[_CandidateRef] = []
     if sorted_external:
         selected.append(sorted_external[0])
@@ -1385,9 +1440,7 @@ def _build_weekly_source_stats(
         in_brief = in_brief_by_source.get(outcome.source_name, 0)
         note: str | None = None
         if outcome.failed:
-            note = (
-                f"falla en la fuente: {outcome.error_summary or 'sin detalle'}"
-            )
+            note = f"falla en la fuente: {outcome.error_summary or 'sin detalle'}"
         elif outcome.fetched > 0 and in_brief == 0:
             note = "ninguno superó la barra editorial"
         label = _DISCOVERY_LABELS.get(outcome.source_name, outcome.source_name)
@@ -1722,6 +1775,35 @@ async def handle_command(
         )
         return telegram_formatting.format_goal_set(new_goal)
 
+    if command.name == CommandName.PUBLISHED:
+        url, explicit_id = _parse_published_args(command.query or "")
+        state = _get_state(chat_id)
+        target_post_id = explicit_id
+        if target_post_id is None and state is not None:
+            target_post_id = state.last_post_id
+        try:
+            publish_result = await post_ledger.mark_published(
+                db, chat_id=chat_id, post_id=target_post_id, url=url
+            )
+        except LookupError:
+            return _not_found("Post", target_post_id or 0)
+        _remember_post(chat_id, None)
+        await _persist_state(db, chat_id)
+        cadence = await post_ledger.cadence_status(db)
+        return telegram_formatting.format_published_ack(publish_result, cadence)
+
+    if command.name == CommandName.POSTS:
+        records = await post_ledger.list_recent(db, limit=8)
+        cadence = await post_ledger.cadence_status(db)
+        return telegram_formatting.format_posts_list(records, cadence)
+
+    if command.name == CommandName.RESET_EDITORIAL:
+        if (command.query or "").strip().lower() != "confirmar":
+            return telegram_formatting.format_reset_confirmation()
+        counts = await reset_editorial_tables(db)
+        _CHAT_STATE.clear()
+        return telegram_formatting.format_reset_done(counts)
+
     if command.name == CommandName.DIAG:
         current_goal = await active_goals.get_current(db)
         report = await diagnostics.build_report(
@@ -1888,18 +1970,27 @@ async def handle_command(
                 )
             except LookupError:
                 return _not_found("Plan", entity_id)
+            post_id = await post_ledger.record_generated(
+                db,
+                plan_id=entity_id,
+                chat_id=chat_id,
+                post=post,
+                llm_used=llm_used,
+                opinion_used=False,
+            )
+            _remember_post(chat_id, post_id)
+            await _persist_state(db, chat_id)
             return telegram_formatting.format_linkedin_post(
                 post,
                 plan_id=entity_id,
                 llm_used=llm_used,
                 source_urls=source_urls,
+                post_id=post_id,
             )
 
         if command.name == CommandName.LINKEDIN_PROMPT:
             try:
-                kit = await linkedin_writer.build_linkedin_prompt_kit(
-                    db, entity_id
-                )
+                kit = await linkedin_writer.build_linkedin_prompt_kit(db, entity_id)
             except LookupError:
                 return _not_found("Plan", entity_id)
             return telegram_formatting.format_linkedin_prompt_kit(kit)
@@ -1926,12 +2017,23 @@ async def handle_command(
             )
         except LookupError:
             return _not_found("Plan", plan_id)
+        post_id = await post_ledger.record_generated(
+            db,
+            plan_id=plan_id,
+            chat_id=chat_id,
+            post=post,
+            llm_used=llm_used,
+            opinion_used=True,
+        )
+        _remember_post(chat_id, post_id)
+        await _persist_state(db, chat_id)
         return telegram_formatting.format_linkedin_post(
             post,
             plan_id=plan_id,
             llm_used=llm_used,
             source_urls=source_urls,
             opinion_used=True,
+            post_id=post_id,
         )
 
     if command.name == CommandName.PAPERS:

@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import UTC, datetime
 from html import escape
+from typing import TYPE_CHECKING
 
 from app.schemas.commands import (
     MvpIdeaSuggestion,
@@ -28,9 +29,17 @@ from app.schemas.editorial import (
     RecommendedAction,
 )
 from app.schemas.goals import ActiveGoal
-from app.schemas.linkedin import LinkedInPost, LinkedInPromptKit
+from app.schemas.linkedin import (
+    LinkedInPost,
+    LinkedInPostRecord,
+    LinkedInPromptKit,
+    PostStatus,
+)
 from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services.diagnostics import DiagReport
+
+if TYPE_CHECKING:
+    from app.services.post_ledger import CadenceStatus, PublishResult
 
 _SOLID_SIGNAL_THRESHOLD = 0.45
 _WEAK_SIGNAL_THRESHOLD = 0.25
@@ -89,6 +98,10 @@ def format_help() -> str:
             "• show_draft 2",
             "• mvp_handoff 7",
             "• weekly",
+            "• linkedin 4",
+            "• publicado https://linkedin.com/posts/...",
+            "• posts",
+            "• diag",
         ]
     )
 
@@ -873,15 +886,7 @@ def _assemble_linkedin_body(post: LinkedInPost) -> str:
     Blank lines between paragraphs are preserved so when Carlos pastes into
     LinkedIn the rendering matches what he sees in Telegram.
     """
-    sections: list[str] = [post.hook.strip(), ""]
-    for paragraph in post.body_paragraphs:
-        sections.append(paragraph.strip())
-        sections.append("")
-    sections.append(post.closing.strip())
-    if post.hashtags:
-        tag_line = " ".join(f"#{tag.strip().lstrip('#')}" for tag in post.hashtags)
-        sections.extend(["", tag_line])
-    return "\n".join(sections).strip()
+    return post.assembled_body()
 
 
 def format_linkedin_post(
@@ -891,6 +896,7 @@ def format_linkedin_post(
     llm_used: bool,
     source_urls: list[tuple[str, str | None]] | None = None,
     opinion_used: bool = False,
+    post_id: int | None = None,
 ) -> str:
     body = _assemble_linkedin_body(post)
     char_count = len(body)
@@ -902,8 +908,11 @@ def format_linkedin_post(
             "Léelo como borrador, no como post listo."
         )
     )
+    header = f"<b>📋 LinkedIn — plan #{plan_id}</b>"
+    if post_id is not None:
+        header = f"<b>📋 LinkedIn — plan #{plan_id} · post #{post_id}</b>"
     lines = [
-        f"<b>📋 LinkedIn — plan #{plan_id}</b>",
+        header,
         (
             "Listo para copiar. Mantén los saltos de línea cuando lo pegues "
             "(LinkedIn los respeta como párrafos en mobile)."
@@ -915,7 +924,7 @@ def format_linkedin_post(
     if source_urls:
         lines.append("<b>Fuentes del plan:</b>")
         for title, url in source_urls:
-            label = escape_text(compact_text(title, 90))
+            label = escape_text(compact_text(title, 200))
             if url:
                 lines.append(f'↗ <a href="{escape_text(url)}">{label}</a>')
             else:
@@ -923,7 +932,7 @@ def format_linkedin_post(
         lines.append("")
     if not opinion_used:
         lines.append(
-            "¿Leíste las fuentes y tenés una perspectiva propia? "
+            "¿Leíste las fuentes y tienes una perspectiva propia? "
             "<code>/opinion &lt;tu perspectiva&gt;</code> "
             "y regenero el post con tu voz."
         )
@@ -934,6 +943,10 @@ def format_linkedin_post(
             (
                 "Antes de publicar: revísalo, ajústalo y dale tu voz final. "
                 "Soy bueno produciendo, no soy tu publisher."
+            ),
+            (
+                "Cuando lo publiques, dime <code>publicado &lt;url&gt;</code> "
+                "y lo registro para la cadencia semanal."
             ),
         ]
     )
@@ -1070,4 +1083,153 @@ def format_diag(report: DiagReport) -> str:
                 ),
             ]
         )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Post ledger and cadence (Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def _cadence_line(cadence: CadenceStatus) -> str:
+    return (
+        f"Esta semana: {cadence.published_last_7d} de "
+        f"{cadence.target_per_week} posts publicados."
+    )
+
+
+def _post_date(record: LinkedInPostRecord) -> str:
+    moment = record.published_at or record.created_at
+    return moment.strftime("%Y-%m-%d")
+
+
+def _post_headline(record: LinkedInPostRecord) -> str:
+    source = record.hook or record.body
+    return escape_text(compact_text(source, 110))
+
+
+def format_published_ack(result: PublishResult, cadence: CadenceStatus) -> str:
+    record = result.record
+    if result.created_manual:
+        first = (
+            f"<b>Registrado como publicado</b> · post #{record.id} "
+            "(escrito por fuera del operador)."
+        )
+    else:
+        first = f"<b>Post #{record.id} marcado como publicado.</b>"
+    lines = [first]
+    if record.published_url:
+        lines.append(
+            f'↗ <a href="{escape_text(record.published_url)}">ver en LinkedIn</a>'
+        )
+    lines.extend(["", _cadence_line(cadence)])
+    if cadence.on_track:
+        lines.append("Cadencia cumplida. Lo que sigue es criterio, no volumen.")
+    else:
+        remaining = cadence.target_per_week - cadence.published_last_7d
+        plural = "post" if remaining == 1 else "posts"
+        lines.append(
+            f"Falta {remaining} {plural} para la meta semanal. "
+            "Si tienes algo en curso, <code>weekly</code> o "
+            "<code>news &lt;tema&gt;</code> y lo armamos."
+        )
+    return "\n".join(lines)
+
+
+def format_posts_list(records: list[LinkedInPostRecord], cadence: CadenceStatus) -> str:
+    lines = ["<b>Posts registrados</b>", _cadence_line(cadence)]
+    days = cadence.days_since_last()
+    if days is not None:
+        lines.append(
+            "Último publicado: hoy."
+            if days == 0
+            else f"Último publicado hace {days} día{'s' if days != 1 else ''}."
+        )
+    else:
+        lines.append("Todavía no hay ningún post marcado como publicado.")
+    lines.append("")
+    if not records:
+        lines.append(
+            "Ninguno todavía. Genera uno con <code>linkedin &lt;plan_id&gt;</code> "
+            "o registra uno externo con <code>publicado &lt;url&gt;</code>."
+        )
+        return "\n".join(lines)
+    status_labels = {
+        PostStatus.GENERATED: "generado, sin publicar",
+        PostStatus.PUBLISHED: "publicado",
+        PostStatus.DISCARDED: "descartado",
+    }
+    for record in records:
+        label = status_labels.get(record.status, record.status.value)
+        plan = f" · plan #{record.plan_id}" if record.plan_id is not None else ""
+        lines.append(f"• #{record.id} · {label} · {_post_date(record)}{plan}")
+        lines.append(f"  {_post_headline(record)}")
+        if record.published_url:
+            lines.append(
+                f'  ↗ <a href="{escape_text(record.published_url)}">ver en LinkedIn</a>'
+            )
+    return "\n".join(lines)
+
+
+def format_cadence_reminder(
+    cadence: CadenceStatus, *, now: datetime | None = None
+) -> str:
+    lines = ["<b>Cadencia de LinkedIn</b>", _cadence_line(cadence)]
+    days = cadence.days_since_last(now)
+    if days is None:
+        lines.append("No tengo registro de ningún post publicado todavía.")
+    elif days >= 1:
+        lines.append(
+            f"El último publicado fue hace {days} día{'s' if days != 1 else ''}."
+        )
+    lines.append("")
+    if cadence.unpublished:
+        lines.append("Tienes posts generados que no se han publicado:")
+        for record in cadence.unpublished[:3]:
+            lines.append(f"• #{record.id} · {_post_headline(record)}")
+        lines.append(
+            "Si alguno ya salió, <code>publicado &lt;url&gt;</code>. "
+            "Si ninguno vale, mejor uno nuevo que un post tibio."
+        )
+    else:
+        lines.append(
+            "No hay borradores en cola. Si publicaste algo por fuera, "
+            "<code>publicado &lt;url&gt;</code>. Si no, dime en qué estás "
+            "trabajando esta semana y armamos el post desde ahí."
+        )
+    return "\n".join(lines)
+
+
+def format_reset_confirmation() -> str:
+    return "\n".join(
+        [
+            "<b>Reinicio editorial</b>",
+            (
+                "Esto borra señales, planes, drafts, posts registrados, "
+                "seguimientos y el estado del chat, y reinicia los ids en 1. "
+                "El goal activo se conserva."
+            ),
+            "",
+            "Si es lo que quieres: <code>/reset_editorial confirmar</code>",
+        ]
+    )
+
+
+def format_reset_done(counts: dict[str, int]) -> str:
+    labels = {
+        "signals": "señales",
+        "editorial_plans": "planes",
+        "editorial_drafts": "drafts",
+        "linkedin_posts": "posts",
+        "pending_handoff_followups": "seguimientos",
+        "messages": "mensajes",
+        "telegram_sessions": "sesiones",
+    }
+    lines = ["<b>Editorial reiniciado.</b> Los próximos ids empiezan en 1."]
+    for table, label in labels.items():
+        lines.append(f"• {label}: {counts.get(table, 0)} borrados")
+    lines.append("")
+    lines.append(
+        "El goal sigue activo. Empezamos limpio: <code>weekly</code> cuando quieras."
+    )
     return "\n".join(lines)

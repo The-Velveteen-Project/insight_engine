@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     weekly_summary_cron: str = "0 9 * * 0"
     weekly_mvp_scan_cron: str = "0 9 * * 4"
 
+    # Phase 1 cadence: how many published posts per week the operator expects,
+    # and how long it waits before nagging again.
+    post_cadence_per_week: int = 2
+    cadence_reminder_min_gap_hours: int = 60
+
     # Operator personalization (Sub-phase A — env-driven; full goal model is
     # planned for Sub-phase B with persistence and a /goal command).
     active_goal_text: str = ""

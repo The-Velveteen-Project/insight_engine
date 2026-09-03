@@ -332,6 +332,25 @@ In practice, that means:
 - and long titles, links, or summaries should only be shortened when they truly hurt comprehension
 - follow-ups like `hazlo`, `apruébalo`, `qué sigue`, and `muéstramelo` should survive ordinary restarts because the operator session now persists in SQLite
 
+## Post Ledger And Cadence
+
+The operator is a career manager, not a draft generator, so it keeps a record
+of what actually went live.
+
+- every `/linkedin` or `/opinion` result is stored in `linkedin_posts` with
+  status `generated`
+- `publicado <url>` (or "ya lo publiqué <url>") marks the last generated post
+  as `published`; with no generated post in context it records a manual post,
+  so writing outside the operator still counts
+- `posts` lists recent posts with status, date and link
+- a cadence check runs Tuesdays and Thursdays (`POST_CADENCE_PER_WEEK`,
+  default 2) and sends one reminder only when the weekly target is not met,
+  never more often than `CADENCE_REMINDER_MIN_GAP_HOURS`
+- `/reset_editorial confirmar` wipes signals, plans, drafts, posts and chat
+  state and restarts ids at 1; the active goal survives
+- `/diag` reports commit, model, host, key presence and whether the LLM
+  answers, without echoing any key
+
 ## Main Working Loops
 
 ### Editorial loop
@@ -419,6 +438,8 @@ This route returns a structured handoff pack only when the persisted plan has `r
 
 - `POST /api/v1/internal/run-weekly-summary`
 - `POST /api/v1/internal/run-mvp-scan`
+- `POST /api/v1/internal/run-cadence-check`
+- `POST /api/v1/internal/process-handoff-followups`
 
 These routes are authenticated with `X-Internal-Token` and are meant for production schedulers such as GitHub Actions.
 
