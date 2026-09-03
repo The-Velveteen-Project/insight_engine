@@ -5,12 +5,10 @@ handle_update flow with Telegram client mocked.
 """
 
 import json
-import sqlite3
 from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock, patch
 
 import aiosqlite
-import pytest
 
 from app.db.queries import get_message_by_id, insert_message, update_message_status
 from app.domain.message import Message

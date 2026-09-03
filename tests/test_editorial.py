@@ -790,8 +790,12 @@ async def test_fallback_why_includes_summary_and_differs_per_signal(
         _signal(
             source_type="arxiv",
             source_id="arxiv-summarytest-1",
-            title="AgroAskAI: A Multi-Agentic AI Framework for Smallholder Farmers",
-            summary="This paper presents an agentic AI system for agricultural queries.",
+            title=(
+                "AgroAskAI: A Multi-Agentic AI Framework for Smallholder Farmers"
+            ),
+            summary=(
+                "This paper presents an agentic AI system for agricultural queries."
+            ),
             relevance_score=0.60,
         ),
     )

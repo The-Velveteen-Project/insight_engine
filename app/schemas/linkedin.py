@@ -67,6 +67,8 @@ class LinkedInPromptKit(BaseModel):
     """
 
     plan_id: int
-    system_prompt: str = Field(min_length=80, max_length=4000)
-    user_prompt: str = Field(min_length=80, max_length=6000)
+    # The real LINKEDIN_SYSTEM_PROMPT is ~7k chars; a 4000 cap made this
+    # model impossible to build, which killed /linkedin_prompt silently.
+    system_prompt: str = Field(min_length=80, max_length=16000)
+    user_prompt: str = Field(min_length=80, max_length=16000)
     one_line_paste_command: str = Field(min_length=20, max_length=320)

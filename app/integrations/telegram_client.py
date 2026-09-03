@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import os
+import re
 import tempfile
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
@@ -15,7 +16,41 @@ def _base() -> str:
     return f"https://api.telegram.org/bot{settings.telegram_bot_token}"
 
 
+_TAG_RE = re.compile(r"<(/?)([a-zA-Z][a-zA-Z0-9-]*)(?:\s[^>]*)?>")
+
+# Room left in every chunk for the closing/reopening tags added by
+# _balance_html_chunks. 64 chars covers a nested <pre><code class="..."> pair.
+_HTML_BALANCE_RESERVE = 64
+
+
+def _balance_html_chunks(chunks: list[str]) -> list[str]:
+    """Close tags left open at a chunk boundary and reopen them in the next.
+
+    Telegram parses each message independently, so a <pre> block that spans
+    two chunks makes both of them invalid HTML (400 "can't parse entities").
+    Content inside <pre>/<code> is already escaped by the formatters, so the
+    only `<` characters present are real tags.
+    """
+    balanced: list[str] = []
+    open_tags: list[tuple[str, str]] = []  # (name, full opening tag)
+    for chunk in chunks:
+        prefix = "".join(tag for _, tag in open_tags)
+        for match in _TAG_RE.finditer(chunk):
+            is_closing, name = bool(match.group(1)), match.group(2).lower()
+            if is_closing:
+                for index in range(len(open_tags) - 1, -1, -1):
+                    if open_tags[index][0] == name:
+                        del open_tags[index]
+                        break
+            else:
+                open_tags.append((name, match.group(0)))
+        suffix = "".join(f"</{name}>" for name, _ in reversed(open_tags))
+        balanced.append(f"{prefix}{chunk}{suffix}")
+    return balanced
+
+
 def _message_chunks(text: str, *, limit: int) -> list[str]:
+    limit = max(limit, 1)
     if len(text) <= limit:
         return [text]
 
@@ -96,8 +131,16 @@ async def send_message(
     parse_mode: str = "HTML",
 ) -> None:
     transport = httpx.AsyncHTTPTransport(retries=1)
+    limit = settings.telegram_max_message_chars
+    if len(text) <= limit:
+        chunks = [text]
+    elif parse_mode == "HTML":
+        reserve = min(_HTML_BALANCE_RESERVE, limit // 4)
+        chunks = _balance_html_chunks(_message_chunks(text, limit=limit - reserve))
+    else:
+        chunks = _message_chunks(text, limit=limit)
     async with httpx.AsyncClient(transport=transport) as client:
-        for chunk in _message_chunks(text, limit=settings.telegram_max_message_chars):
+        for chunk in chunks:
             await _post_message(
                 client,
                 chat_id=chat_id,

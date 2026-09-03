@@ -19,6 +19,8 @@ from app.core.config import settings
 if TYPE_CHECKING:
     from openai import AsyncOpenAI
 
+_OPENAI_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+
 
 def build_async_openai_client(
     *,
@@ -28,10 +30,11 @@ def build_async_openai_client(
     """Construct AsyncOpenAI honoring settings.openai_base_url when set."""
     from openai import AsyncOpenAI
 
-    base_url = settings.openai_base_url.strip() or None
-    kwargs: dict[str, object] = {"api_key": api_key}
-    if base_url is not None:
-        kwargs["base_url"] = base_url
+    # Always pass base_url explicitly. The SDK reads OPENAI_BASE_URL from the
+    # environment when base_url is None, and an *empty* env value (common in
+    # hosted dashboards) becomes an empty URL that breaks every request.
+    base_url = settings.openai_base_url.strip() or _OPENAI_DEFAULT_BASE_URL
+    kwargs: dict[str, object] = {"api_key": api_key, "base_url": base_url}
     if timeout_seconds is not None:
         kwargs["timeout"] = timeout_seconds
     return AsyncOpenAI(**kwargs)  # type: ignore[arg-type]

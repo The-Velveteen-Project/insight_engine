@@ -1896,7 +1896,8 @@ async def handle_command(
         opinion_text = (command.query or "").strip()
         if not opinion_text:
             return (
-                "<b>Uso:</b> <code>/opinion &lt;tu perspectiva sobre el artículo&gt;</code>\n\n"
+                "<b>Uso:</b> "
+                "<code>/opinion &lt;tu perspectiva sobre el artículo&gt;</code>\n\n"
                 "Leé las fuentes del plan y escribí lo que notaste o pensaste. "
                 "Regenero el post de LinkedIn con tu voz como punto de partida."
             )

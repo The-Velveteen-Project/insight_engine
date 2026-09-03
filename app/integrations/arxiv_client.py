@@ -21,6 +21,7 @@ from urllib.parse import urlencode
 import httpx
 
 from app.schemas.discovery import SignalCandidate
+from app.utils.text import trim_to_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -62,8 +63,7 @@ def _parse_feed(xml_bytes: bytes) -> list[SignalCandidate]:
         title = _text(entry.find(f"{{{_ATOM_NS}}}title")).replace("\n", " ")
         summary = _text(entry.find(f"{{{_ATOM_NS}}}summary")).replace("\n", " ")
         # Trim summary to 500 chars to keep DB rows reasonable
-        if len(summary) > 500:
-            summary = summary[:497] + "…"
+        summary = trim_to_boundary(summary, 500)
 
         published = _parse_date(_text(entry.find(f"{{{_ATOM_NS}}}published")))
 

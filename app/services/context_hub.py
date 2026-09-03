@@ -23,6 +23,7 @@ from app.db.queries import (
     get_recent_editorial_plans,
     get_recent_signals,
 )
+from app.utils.text import trim_to_boundary
 
 _STATIC_CONTEXT_PATH = (
     Path(__file__).resolve().parent.parent / "context" / "velveteen_linkedin_github.md"
@@ -46,12 +47,7 @@ def get_static_context() -> str:
 
 
 def _compact(text: str | None, limit: int = 120) -> str:
-    if not text:
-        return ""
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 1] + "…"
+    return trim_to_boundary(text, limit)
 
 
 async def build_dynamic_context(db: aiosqlite.Connection) -> str:

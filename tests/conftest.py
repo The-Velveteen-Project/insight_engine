@@ -7,6 +7,13 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "test-token-000")
 os.environ.setdefault("TELEGRAM_WEBHOOK_SECRET", "")
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["GITHUB_TOKEN"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["EXA_API_KEY"] = ""
+os.environ["OPENAI_BASE_URL"] = ""
+os.environ["ACTIVE_GOAL_TEXT"] = ""
+os.environ["ENABLE_SCHEDULER"] = "false"
+# Tests mock arxiv + exa; never let a local .env re-enable a live source
+os.environ["DISCOVERY_ENABLED_SOURCES"] = "arxiv,exa"
 
 _db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _db.close()

@@ -1,4 +1,5 @@
 import logging
+from html import escape
 
 import aiosqlite
 
@@ -10,6 +11,7 @@ from app.schemas.telegram import TelegramMessage, TelegramUpdate
 from app.services.classifier import MessageClassification, classify, classify_channel
 from app.services.telegram_orchestrator import handle_operator_text
 from app.services.transcription import get_transcriber
+from app.utils.text import trim_to_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ def _ack(
 
     if c.message_type == MessageType.VOICE:
         if transcription:
-            preview = transcription[:80] + ("…" if len(transcription) > 80 else "")
+            preview = escape(trim_to_boundary(transcription, 80), quote=False)
             return f"<b>Voice{channel_tag}</b>\n<code>{preview}</code>"
         duration = msg.voice.duration if msg.voice else 0
         return f"<b>Voice{channel_tag}</b> ({duration}s) — transcription unavailable."
@@ -45,7 +47,7 @@ def _ack(
         return f"<b>Document{channel_tag}:</b> {name}"
 
     text = msg.text or ""
-    preview = text[:60] + ("…" if len(text) > 60 else "")
+    preview = escape(trim_to_boundary(text, 60), quote=False)
     return f"<b>Received{channel_tag}</b>\n<code>{preview}</code>"
 
 

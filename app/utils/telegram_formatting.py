@@ -932,7 +932,8 @@ def format_linkedin_post(
     if not opinion_used:
         lines.append(
             "¿Leíste las fuentes y tenés una perspectiva propia? "
-            "<code>/opinion <tu perspectiva></code> y regenero el post con tu voz."
+            "<code>/opinion &lt;tu perspectiva&gt;</code> "
+            "y regenero el post con tu voz."
         )
         lines.append("")
     lines.extend([

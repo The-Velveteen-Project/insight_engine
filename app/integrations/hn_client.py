@@ -24,6 +24,7 @@ from typing import TypedDict, cast
 import httpx
 
 from app.schemas.discovery import SignalCandidate
+from app.utils.text import trim_to_boundary
 
 logger = logging.getLogger(__name__)
 
@@ -65,8 +66,7 @@ def _parse_hits(hits: list[HackerNewsHit]) -> list[SignalCandidate]:
         # External URL if it's a link post; HN discussion URL for text posts
         raw_url: str = hit.get("url") or f"{_HN_ITEM_BASE}{hn_id}"
         summary = _clean_summary(hit.get("story_text"), title)
-        if len(summary) > 500:
-            summary = summary[:497] + "…"
+        summary = trim_to_boundary(summary, 500)
 
         published_at = _parse_timestamp(hit.get("created_at_i"))
 

@@ -20,7 +20,6 @@ import aiosqlite
 from app.core.config import settings
 from app.db.queries import get_signals_by_ids
 from app.integrations.openai_compat import build_async_openai_client
-from app.services.generation import _structured_completion
 from app.prompts.linkedin import (
     LINKEDIN_SYSTEM_PROMPT,
     build_linkedin_prompt_kit_text,
@@ -34,6 +33,7 @@ from app.schemas.linkedin import (
 )
 from app.services import active_goals
 from app.services.editorial_planner import get_persisted_editorial_plan
+from app.services.generation import _structured_completion
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,6 @@ Tests for Telegram command parsing and orchestration.
 from __future__ import annotations
 
 from datetime import datetime
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import aiosqlite
@@ -1799,7 +1798,9 @@ async def test_handle_command_opinion_regenerates_post_with_founder_voice(
     # Seed state so the chat has an active plan
     _CHAT_STATE[42] = _ChatState(last_plan_id=5, last_signal_ids=[])
 
-    opinion = "el routing multi-agente de AgroAskAI es lo que necesito en StochastoGreen"
+    opinion = (
+        "el routing multi-agente de AgroAskAI es lo que necesito en StochastoGreen"
+    )
 
     with patch(
         "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",

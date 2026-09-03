@@ -14,6 +14,7 @@ from app.schemas.editorial import RecommendedAction
 from app.schemas.mvp_handoff import MvpHandoffPack, MvpPromptBundle
 from app.services.context_hub import build_dynamic_context, get_static_context
 from app.services.editorial_planner import get_persisted_editorial_plan
+from app.utils.text import trim_to_boundary
 
 
 class MvpHandoffStateError(Exception):
@@ -21,10 +22,7 @@ class MvpHandoffStateError(Exception):
 
 
 def _compact(text: str, limit: int = 300) -> str:
-    compact = " ".join(text.split())
-    if len(compact) <= limit:
-        return compact
-    return compact[: limit - 1] + "…"
+    return trim_to_boundary(text, limit)
 
 
 async def create_mvp_handoff_pack(

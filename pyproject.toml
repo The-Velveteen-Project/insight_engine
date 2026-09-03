@@ -32,6 +32,7 @@ packages = ["app"]
 [tool.ruff]
 target-version = "py311"
 line-length = 88
+extend-exclude = [".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

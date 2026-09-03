@@ -12,6 +12,7 @@ import logging
 from typing import Protocol, TypeVar, runtime_checkable
 
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from app.core.config import settings
@@ -50,7 +51,7 @@ async def _structured_completion(
     response_cls: type[_BM],
     max_tokens: int,
     temperature: float,
-) -> "_BM | None":
+) -> _BM | None:
     """Provider-agnostic structured LLM call with two-tier fallback.
 
     Tier 1 — beta.chat.completions.parse():
@@ -66,7 +67,7 @@ async def _structured_completion(
     Only if both tiers fail do we return None, at which point callers must
     use their deterministic fallback.
     """
-    messages: list[dict[str, str]] = [
+    messages: list[ChatCompletionMessageParam] = [
         {"role": "system", "content": system},
         {"role": "user", "content": user},
     ]
@@ -156,7 +157,10 @@ class StructuredWeeklyThesisGenerator(Protocol):
 
 
 class OpenAIEditorialGenerator:
-    """Structured editorial generation — provider-agnostic via _structured_completion."""
+    """Structured editorial generation.
+
+    Provider-agnostic via _structured_completion.
+    """
 
     def __init__(self, api_key: str, model: str) -> None:
         self._client = build_async_openai_client(api_key=api_key)
@@ -178,7 +182,10 @@ class OpenAIEditorialGenerator:
 
 
 class OpenAIDraftGenerator:
-    """Structured draft generation — provider-agnostic via _structured_completion."""
+    """Structured draft generation.
+
+    Provider-agnostic via _structured_completion.
+    """
 
     def __init__(self, api_key: str, model: str) -> None:
         self._client = build_async_openai_client(api_key=api_key)
@@ -200,7 +207,10 @@ class OpenAIDraftGenerator:
 
 
 class OpenAIWeeklyThesisGenerator:
-    """Structured weekly-thesis generation — provider-agnostic via _structured_completion."""
+    """Structured weekly-thesis generation.
+
+    Provider-agnostic via _structured_completion.
+    """
 
     def __init__(
         self,
@@ -230,7 +240,10 @@ class OpenAIWeeklyThesisGenerator:
 
 
 class OpenAIHandoffMatcher:
-    """Structured plan↔repo match judgment — provider-agnostic via _structured_completion."""
+    """Structured plan↔repo match judgment.
+
+    Provider-agnostic via _structured_completion.
+    """
 
     def __init__(
         self,
