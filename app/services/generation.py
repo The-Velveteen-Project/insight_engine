@@ -16,7 +16,10 @@ from openai.types.chat import ChatCompletionMessageParam
 from pydantic import BaseModel
 
 from app.core.config import settings
-from app.integrations.openai_compat import build_async_openai_client
+from app.integrations.openai_compat import (
+    build_async_openai_client,
+    completion_params,
+)
 from app.prompts.drafts import DRAFT_SYSTEM_PROMPT, build_draft_prompt
 from app.prompts.editorial import (
     EDITORIAL_SYSTEM_PROMPT,
@@ -78,14 +81,11 @@ async def _structured_completion(
             model=model,
             messages=messages,
             response_format=response_cls,
-            max_tokens=max_tokens,
-            temperature=temperature,
+            **completion_params(model, max_tokens=max_tokens, temperature=temperature),
         )
         parsed = resp.choices[0].message.parsed if resp.choices else None
         if isinstance(parsed, response_cls):
-            logger.debug(
-                "Structured output (parse) succeeded for model=%r.", model
-            )
+            logger.debug("Structured output (parse) succeeded for model=%r.", model)
             return parsed
     except Exception as exc:
         logger.debug(
@@ -112,16 +112,13 @@ async def _structured_completion(
                 {"role": "user", "content": user},
             ],
             response_format={"type": "json_object"},
-            max_tokens=max_tokens,
-            temperature=temperature,
+            **completion_params(model, max_tokens=max_tokens, temperature=temperature),
         )
         content = resp2.choices[0].message.content if resp2.choices else None
         if not content:
             return None
         result = response_cls.model_validate_json(content)
-        logger.debug(
-            "Structured output (json_object) succeeded for model=%r.", model
-        )
+        logger.debug("Structured output (json_object) succeeded for model=%r.", model)
         return result
     except Exception as exc2:
         logger.warning(

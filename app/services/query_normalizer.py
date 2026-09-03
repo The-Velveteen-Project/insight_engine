@@ -26,7 +26,10 @@ from typing import Any
 from openai.types.chat import ChatCompletionMessageParam
 
 from app.core.config import settings
-from app.integrations.openai_compat import build_async_openai_client
+from app.integrations.openai_compat import (
+    build_async_openai_client,
+    completion_params,
+)
 
 logger = logging.getLogger(__name__)
 _CACHE: OrderedDict[str, str] = OrderedDict()
@@ -101,9 +104,8 @@ async def _normalize_with_openai(stripped: str) -> str:
     response = await asyncio.wait_for(
         client.chat.completions.create(
             model=settings.editorial_model,
-            max_tokens=32,
-            temperature=0,
             messages=messages,
+            **completion_params(settings.editorial_model, max_tokens=32, temperature=0),
         ),
         timeout=settings.normalizer_timeout_seconds,
     )

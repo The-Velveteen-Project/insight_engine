@@ -30,11 +30,14 @@ class Settings(BaseSettings):
     openai_base_url: str = ""
     whisper_model: str = "whisper-1"
     editorial_model: str = "gpt-4.1-mini"
+    # Small, fast model for utilities (query normalization, probes). Empty
+    # means "same as editorial_model".
+    utility_model: str = ""
 
     # Query normalization via Claude Haiku (optional — falls back to raw query)
     anthropic_api_key: str = ""
     normalizer_model: str = "claude-haiku-4-5"
-    normalizer_timeout_seconds: float = 3.0
+    normalizer_timeout_seconds: float = 8.0
     normalizer_cache_size: int = 128
 
     discovery_default_limit: int = 3
@@ -73,10 +76,10 @@ class Settings(BaseSettings):
     active_goal_text: str = ""
     weekly_focus_label: str = ""
     weekly_use_llm_thesis: bool = True
-    weekly_thesis_timeout_seconds: float = 12.0
+    weekly_thesis_timeout_seconds: float = 30.0
     handoff_followup_delay_hours: int = 48
-    handoff_match_timeout_seconds: float = 10.0
-    linkedin_writer_timeout_seconds: float = 14.0
+    handoff_match_timeout_seconds: float = 20.0
+    linkedin_writer_timeout_seconds: float = 30.0
 
     db_path: str = "data/engine.db"
     debug: bool = False
@@ -89,6 +92,10 @@ class Settings(BaseSettings):
             for source in self.discovery_enabled_sources.split(",")
             if source.strip()
         )
+
+    @property
+    def resolved_utility_model(self) -> str:
+        return self.utility_model.strip() or self.editorial_model
 
     @property
     def discovery_rss_feed_list(self) -> tuple[str, ...]:

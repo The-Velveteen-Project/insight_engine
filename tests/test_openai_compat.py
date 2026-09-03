@@ -52,3 +52,16 @@ def test_build_client_passes_timeout_when_provided() -> None:
     timeout = getattr(client, "timeout", None)
     if timeout is not None:
         assert float(getattr(timeout, "read", timeout)) == 7.5  # type: ignore[arg-type]
+
+
+def test_completion_params_uses_max_completion_tokens_everywhere() -> None:
+    from app.integrations.openai_compat import completion_params
+
+    legacy = completion_params("gpt-4.1-mini", max_tokens=100, temperature=0.2)
+    assert legacy == {"max_completion_tokens": 100, "temperature": 0.2}
+
+    reasoning = completion_params("gpt-5.6-luna", max_tokens=100, temperature=0.2)
+    assert reasoning == {"max_completion_tokens": 100}
+
+    routed = completion_params("openai/gpt-5.4-mini", max_tokens=50, temperature=0)
+    assert "temperature" not in routed

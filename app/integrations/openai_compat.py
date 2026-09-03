@@ -12,7 +12,7 @@ audio-shape parity is fragile.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict
 
 from app.core.config import settings
 
@@ -38,3 +38,31 @@ def build_async_openai_client(
     if timeout_seconds is not None:
         kwargs["timeout"] = timeout_seconds
     return AsyncOpenAI(**kwargs)  # type: ignore[arg-type]
+
+
+# Reasoning-era models (gpt-5.x, o-series) reject `max_tokens` and any
+# `temperature` other than the default. Older chat models accept both names.
+_FIXED_TEMPERATURE_PREFIXES = ("gpt-5", "o1", "o3", "o4")
+
+
+class CompletionParams(TypedDict, total=False):
+    max_completion_tokens: int
+    temperature: float
+
+
+def completion_params(
+    model: str,
+    *,
+    max_tokens: int,
+    temperature: float | None = None,
+) -> CompletionParams:
+    """Token-limit and sampling kwargs that every current OpenAI model accepts.
+
+    `max_completion_tokens` is understood by the whole chat lineup; `max_tokens`
+    is rejected by gpt-5.x. Temperature is only sent to models that honor it.
+    """
+    params: CompletionParams = {"max_completion_tokens": max_tokens}
+    bare = model.split("/")[-1].lower()
+    if temperature is not None and not bare.startswith(_FIXED_TEMPERATURE_PREFIXES):
+        params["temperature"] = temperature
+    return params

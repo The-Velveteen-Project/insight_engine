@@ -14,7 +14,10 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from app.core.config import settings
-from app.integrations.openai_compat import build_async_openai_client
+from app.integrations.openai_compat import (
+    build_async_openai_client,
+    completion_params,
+)
 from app.utils.text import trim_to_boundary
 
 _PROBE_TIMEOUT_SECONDS = 20.0
@@ -60,7 +63,7 @@ async def llm_probe() -> tuple[bool, str]:
     try:
         response = await client.chat.completions.create(
             model=settings.editorial_model,
-            max_tokens=5,
+            **completion_params(settings.editorial_model, max_tokens=16),
             messages=[{"role": "user", "content": "Reply with the single word: ok"}],
         )
     except Exception as exc:
