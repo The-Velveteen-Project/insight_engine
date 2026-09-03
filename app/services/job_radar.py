@@ -145,6 +145,8 @@ class RadarResult:
     new_leads: list[JobLead] = field(default_factory=list)
     already_known: int = 0
     below_fit: int = 0
+    # Best of the discarded, so the operator can show what it judged and why.
+    below_fit_samples: list[JobLeadCandidate] = field(default_factory=list)
     outcomes: list[RadarOutcome] = field(default_factory=list)
 
     @property
@@ -352,6 +354,7 @@ async def run_radar(
             seen_urls.add(candidate.url)
             if candidate.fit_score < settings.job_min_fit and not candidate.dream:
                 result.below_fit += 1
+                result.below_fit_samples.append(candidate)
                 continue
             lead_id, created = await _persist(db, candidate)
             if not created:
@@ -362,6 +365,8 @@ async def run_radar(
                 result.new_leads.append(_row_to_lead(row))
 
     result.new_leads.sort(key=lambda lead: (lead.dream, lead.fit_score), reverse=True)
+    result.below_fit_samples.sort(key=lambda c: c.fit_score, reverse=True)
+    del result.below_fit_samples[3:]
     logger.info(
         "Job radar: %d queries, %d new, %d known, %d below fit.",
         len(queries),

@@ -182,3 +182,29 @@ async def test_internal_job_radar_route(client) -> None:
         )
     mock_run.assert_awaited_once()
     assert response.json()["job"] == "job_radar"
+
+
+async def test_radar_shows_best_discarded_when_nothing_passes(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    from tests.test_telegram_html import assert_valid_telegram_html
+
+    monkeypatch.setattr("app.services.job_radar.settings.job_radar_queries", "q1")
+    weak = [
+        {
+            "id": "w1",
+            "title": "Marketing Manager <B2B>",
+            "url": "https://jobs.lever.co/acme/weak-1",
+            "highlights": ["Own the funnel."],
+        }
+    ]
+    with patch(
+        "app.services.job_radar.exa_client.search", AsyncMock(return_value=weak)
+    ):
+        result = await job_radar.run_radar(db)
+    assert not result.new_leads
+    assert result.below_fit == 1
+    text = fmt.format_job_radar(result)
+    assert "Lo mejor de lo que descarté" in text
+    assert "Marketing Manager" in text
+    assert_valid_telegram_html(text)

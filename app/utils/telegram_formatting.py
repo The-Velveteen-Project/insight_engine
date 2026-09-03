@@ -1294,6 +1294,21 @@ def format_job_radar(result: RadarResult, *, scheduled: bool = False) -> str:
             "Nada nuevo que valga la pena esta vez. Si quieres afinar, "
             "<code>jobs &lt;tema&gt;</code> con un rol concreto."
         )
+        if result.below_fit_samples:
+            lines.append("")
+            lines.append("Lo mejor de lo que descarté, para que juzgues el filtro:")
+            for candidate in result.below_fit_samples:
+                company = (
+                    f" · {escape_text(candidate.company)}" if candidate.company else ""
+                )
+                lines.append(
+                    f"• {escape_text(compact_text(candidate.title, 100))}{company} · "
+                    f"fit {candidate.fit_score:.2f}"
+                )
+                lines.append(
+                    f"  {escape_text(compact_text(candidate.fit_note, 140))} · "
+                    f'<a href="{escape_text(candidate.url)}">ver</a>'
+                )
         return "\n".join(lines)
     for lead in result.new_leads[:6]:
         lines.extend(_lead_lines(lead))
