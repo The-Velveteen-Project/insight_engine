@@ -321,7 +321,8 @@ async def test_pasted_url_becomes_signal_then_long_opinion_post(
         AsyncMock(return_value=(post, True, [])),
     ) as writer2:
         combined = await handle_operator_text(
-            "https://openai.com/index/gpt-6-astra/ y mi opinión va aquí en varias líneas",
+            "https://openai.com/index/gpt-6-astra/ "
+            "y mi opinión va aquí en varias líneas",
             db,
             chat_id=8201,
         )

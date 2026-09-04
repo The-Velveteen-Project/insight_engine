@@ -49,6 +49,7 @@ if TYPE_CHECKING:
     from app.services.friday_recap import RecapReport
     from app.services.job_radar import RadarResult
     from app.services.post_ledger import CadenceStatus, PublishResult
+    from app.services.post_visuals import VisualPlan
 
 _SOLID_SIGNAL_THRESHOLD = 0.45
 _WEAK_SIGNAL_THRESHOLD = 0.25
@@ -1966,4 +1967,37 @@ def format_url_read(candidate: SignalCandidate, *, signal_id: int) -> str:
             "También puedes pegar enlace y opinión en un solo mensaje."
         ),
     ]
+    return "\n".join(lines)
+
+
+def format_visual_plan(
+    record: LinkedInPostRecord, visual: VisualPlan, *, card_sent: bool
+) -> str:
+    lines = [f"<b>Imagen para el post #{record.id}</b>", ""]
+    lines.append("<b>Qué usaría, en orden</b>")
+    lines.extend(f"• {escape_text(item)}" for item in visual.recommendations)
+    lines.append("")
+    if visual.claim is not None:
+        if card_sent:
+            lines.append(
+                f"La tarjeta con {escape_text(visual.claim.value_text)} "
+                "va arriba como foto. "
+                "Si el texto no es el que quieres, cambia la frase en el post y pide "
+                "<code>imagen</code> de nuevo."
+            )
+        else:
+            lines.append(
+                "Encontré un número para la tarjeta pero no pude adjuntarla; "
+                "inténtalo de nuevo en un momento."
+            )
+    else:
+        lines.append(
+            "No hay número en el post, así que no armo tarjeta: "
+            "sin imagen, o con material tuyo."
+        )
+    lines.append("")
+    lines.append(
+        "Regla de la casa: nada de ilustraciones generadas por IA. Tu audiencia "
+        "las reconoce y restan."
+    )
     return "\n".join(lines)

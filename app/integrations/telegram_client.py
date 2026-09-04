@@ -172,6 +172,28 @@ async def send_document(
         response.raise_for_status()
 
 
+async def send_photo(
+    chat_id: int,
+    *,
+    filename: str,
+    content: bytes,
+    caption: str | None = None,
+) -> None:
+    """Send a PNG as a photo (rendered inline, unlike a document)."""
+    data: dict[str, str] = {"chat_id": str(chat_id)}
+    if caption:
+        data["caption"] = caption[:1024]
+        data["parse_mode"] = "HTML"
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            f"{_base()}/sendPhoto",
+            data=data,
+            files={"photo": (filename, content, "image/png")},
+            timeout=30.0,
+        )
+        response.raise_for_status()
+
+
 async def download_file(file_id: str, *, max_bytes: int = 2_000_000) -> bytes:
     """Resolve a Telegram file_id and return its bytes (bounded)."""
     file_meta = await get_file(file_id)

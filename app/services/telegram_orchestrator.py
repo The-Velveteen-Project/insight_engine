@@ -29,7 +29,7 @@ from app.db.queries import (
     reset_job_tables,
     upsert_telegram_session,
 )
-from app.integrations.telegram_client import send_document
+from app.integrations.telegram_client import send_document, send_photo
 from app.schemas.commands import (
     CommandName,
     MvpIdeaSuggestion,
@@ -67,6 +67,7 @@ from app.services import (
     linkedin_writer,
     mvp_handoff,
     post_ledger,
+    post_visuals,
     url_reader,
 )
 from app.services import campaign as campaign_service
@@ -201,6 +202,12 @@ _PIPELINE_RE = re.compile(
     r"^(?:pipeline|mis\s+aplicaciones|aplicaciones|"
     r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)"
     r"(?:\s+(?P<lane>realistas?|ambicios[oa]s?))?\s*[?¿!]*\s*$",
+    re.I,
+)
+_IMAGE_RE = re.compile(
+    r"^(?:dame\s+|hazme\s+|arma(?:me)?\s+|genera(?:me)?\s+)?"
+    r"(?:una\s+|la\s+)?(?:imagen|visual|tarjeta)"
+    r"(?:\s+(?:para|del|de)\s+(?:el\s+)?(?:post\s*)?#?(?P<id>\d+)?)?\s*[?¿!.]*\s*$",
     re.I,
 )
 _READ_URL_RE = re.compile(
@@ -364,6 +371,8 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "recap": CommandName.RECAP,
     "columna": CommandName.COLUMN,
     "hallazgo": CommandName.FINDING,
+    "imagen": CommandName.IMAGE,
+    "visual": CommandName.IMAGE,
     "proyecto": CommandName.PROJECT,
     "brief": CommandName.PROJECT,
 }
@@ -1028,6 +1037,11 @@ def _natural_command(
         )
     if _RECAP_RE.match(stripped):
         return ParsedTelegramCommand(name=CommandName.RECAP, query=None, raw_text=text)
+    image_match = _IMAGE_RE.match(stripped)
+    if image_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.IMAGE, query=image_match.group("id"), raw_text=text
+        )
     url_match = _READ_URL_RE.match(stripped)
     if url_match is not None:
         rest = (url_match.group("rest") or "").strip(" :-–\n")
@@ -2175,6 +2189,39 @@ async def handle_command(
     if command.name == CommandName.RECAP:
         recap_report = await friday_recap.build_recap(db)
         return telegram_formatting.format_friday_recap(recap_report)
+
+    if command.name == CommandName.IMAGE:
+        post_id_arg, _ = _parse_lead_args(command.query or "")
+        image_state = _get_state(chat_id)
+        target_post = post_id_arg
+        if target_post is None and image_state is not None:
+            target_post = image_state.last_post_id
+        if target_post is None:
+            latest = await post_ledger.list_recent(db, limit=1)
+            target_post = latest[0].id if latest else None
+        if target_post is None:
+            return (
+                "No hay ningún post registrado todavía. "
+                "Genera uno con <code>linkedin</code>."
+            )
+        try:
+            record = await post_ledger.get_record(db, target_post)
+        except LookupError:
+            return _not_found("Post", target_post)
+        visual = await post_visuals.plan_visual(db, record)
+        sent = False
+        if visual.card_png is not None and chat_id is not None:
+            try:
+                await send_photo(
+                    chat_id,
+                    filename=f"velveteen_card_post_{record.id}.png",
+                    content=visual.card_png,
+                    caption=f"Tarjeta de datos · post #{record.id}",
+                )
+                sent = True
+            except Exception as exc:
+                logger.warning("Card send failed for post %s: %s", record.id, exc)
+        return telegram_formatting.format_visual_plan(record, visual, card_sent=sent)
 
     if command.name == CommandName.READ_URL:
         read_url, _, read_rest = (command.query or "").partition(" ")

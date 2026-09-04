@@ -24,6 +24,7 @@ new evidence.
 | Editorial | signal to persisted plan, human approval, structured draft, optional MVP handoff pack | `plan`, `apruébalo`, `draft`, `mvp_handoff` |
 | LinkedIn | paste-ready posts in English, written from Carlos's perspective with his own published posts as voice exemplars; optional founder opinion as the primary input | `linkedin`, `opinion`, `linkedin_prompt` |
 | Tuesday column / Thursday finding | three candidates from blogs (Tuesday) or papers (Thursday) and a one-line command that turns one into a post with his opinion | `columna`, `columna 1: mi opinión`, `hallazgo` |
+| Visuals | rule-based recommendation of what image to use (own artifacts first) and a deterministic data card when the post cites a number; no generated illustrations | `imagen [post_id]` |
 | Post ledger | every generated post recorded; published ones marked with URL; weekly cadence target with quiet reminders | `publicado <url>`, `posts` |
 | Job radar | two leagues: general boards via Exa (realistic) and direct Greenhouse/Ashby boards of target companies (ambitious); deterministic fit score with a readable note; salary, country and requirements extracted from the posting | `jobs`, `jobs realista`, `jobs ambicioso`, `vacante <id>`, `pipeline [liga]` |
 | Applications | pipeline moved by hand | `aplicado <id>`, `estado <id> entrevista\|oferta\|rechazado\|guardado\|descartado` |
