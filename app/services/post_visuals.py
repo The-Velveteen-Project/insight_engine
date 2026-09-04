@@ -33,14 +33,23 @@ _SENTENCE_RE = re.compile(r"(?<=[.!?])\s+")
 
 _OWN_WORK: dict[str, str] = {
     "carmen": "una foto del póster de CARMEN en AIiH o una captura del dashboard",
-    "cemracs": "la figura del capacity factor contra el caudal (CEMRACS) o la foto del pizarrón",
+    "cemracs": (
+        "la figura del capacity factor contra el caudal (CEMRACS) "
+        "o la foto del pizarrón"
+    ),
     "ecoagent": "una captura del mapa de alertas de EcoAgent/ALLO",
     "allo": "una captura del mapa de alertas de EcoAgent/ALLO",
     "stochastogreen": "una captura del dashboard de StochastoGreen con un ticker real",
     "antigenlm": "una figura del embedding de HA/NA con la deriva temporal coloreada",
-    "antigensde": "una trayectoria simulada del latent SDE (una sola figura, sin decoración)",
-    "insight engine": "una captura del chat de Telegram con un plan aprobado (sin datos personales)",
-    "velveteen": "una captura del chat de Telegram con un plan aprobado (sin datos personales)",
+    "antigensde": (
+        "una trayectoria simulada del latent SDE (una sola figura, sin decoración)"
+    ),
+    "insight engine": (
+        "una captura del chat de Telegram con un plan aprobado (sin datos personales)"
+    ),
+    "velveteen": (
+        "una captura del chat de Telegram con un plan aprobado (sin datos personales)"
+    ),
 }
 
 
@@ -103,7 +112,8 @@ def recommend(record: LinkedInPostRecord, claim: NumberClaim | None) -> list[str
     if not picks:
         picks.append(
             "Este post no cita un número ni un artefacto tuyo. Publícalo sin imagen: "
-            "un texto bien escrito no pierde alcance, y una ilustración genérica sí resta."
+            "un texto bien escrito no pierde alcance, y una ilustración genérica "
+            "sí resta."
         )
     return picks[:3]
 

@@ -43,7 +43,8 @@ select = ["E", "F", "I", "UP"]
 known-first-party = ["app"]
 
 [tool.mypy]
-python_version = "3.11"
+# 3.12: numpy/matplotlib stubs use `type` statements that 3.11 cannot parse.
+python_version = "3.12"
 strict = true
 ignore_missing_imports = true
 
