@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from html import escape
 from typing import TYPE_CHECKING
 
+from app.schemas.campaign import CampaignPlanItem, PlanItemKind
 from app.schemas.commands import (
     MvpIdeaSuggestion,
     SignalSuggestion,
@@ -41,7 +42,9 @@ from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services.diagnostics import DiagReport
 
 if TYPE_CHECKING:
+    from app.services.campaign import CampaignProgress
     from app.services.cv_tailor import MasterCV
+    from app.services.friday_recap import RecapReport
     from app.services.job_radar import RadarResult
     from app.services.post_ledger import CadenceStatus, PublishResult
 
@@ -1630,4 +1633,191 @@ def format_cv_delivered(
         "Regla de oro: todo lo que dice sale de tu CV maestro. Si ves algo que "
         "no es cierto, el error está en el maestro; corrígelo ahí."
     )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Monthly campaign and Friday recap (Phase 3)
+# ---------------------------------------------------------------------------
+
+_KIND_LABELS: dict[PlanItemKind, str] = {
+    PlanItemKind.BUILD: "build",
+    PlanItemKind.POST: "post",
+    PlanItemKind.LEARN: "estudio",
+    PlanItemKind.APPLY: "aplicación",
+}
+
+
+def _campaign_header(progress: CampaignProgress) -> str:
+    campaign = progress.campaign
+    company = f" · {escape_text(campaign.company)}" if campaign.company else ""
+    return (
+        f"<b>Objetivo del mes · vacante #{campaign.lead_id} · "
+        f"{escape_text(compact_text(campaign.lead_title, 80))}{company}</b>"
+    )
+
+
+def _plan_item_line(item: CampaignPlanItem) -> str:
+    mark = "✅" if item.done else "⬜"
+    kind = _KIND_LABELS.get(item.kind, item.kind.value)
+    line = f"{mark} {item.n}. [{kind} · semana {item.week}] {escape_text(item.title)}"
+    if item.evidence_url:
+        line += f' · <a href="{escape_text(item.evidence_url)}">evidencia</a>'
+    return line
+
+
+def format_no_campaign() -> str:
+    return "\n".join(
+        [
+            "<b>No hay objetivo del mes.</b>",
+            (
+                "Elige una vacante ambiciosa y dime <code>objetivo &lt;id&gt;</code>: "
+                "hago la brecha, la convierto en un plan de cuatro semanas con builds "
+                "y posts, y el viernes te digo cómo va."
+            ),
+        ]
+    )
+
+
+def format_campaign(progress: CampaignProgress) -> str:
+    campaign = progress.campaign
+    lines = [
+        _campaign_header(progress),
+        (
+            f"Semana {progress.week_number} de 4 · {progress.done}/{progress.total} "
+            f"piezas · aplicar el {campaign.target_apply_at.strftime('%Y-%m-%d')} "
+            f"({progress.days_left} días)"
+        ),
+        "",
+        f"<i>{escape_text(campaign.plan.thesis)}</i>",
+        "",
+    ]
+    for item in campaign.plan.items:
+        lines.append(_plan_item_line(item))
+        lines.append(f"   {escape_text(compact_text(item.why, 160))}")
+    lines.append("")
+    if progress.next_items:
+        nxt = progress.next_items[0]
+        lines.append(f"Siguiente: {nxt.n}. {escape_text(nxt.title)}")
+    lines.append(
+        "Marca una pieza: <code>hecho &lt;n&gt; &lt;url&gt;</code>. "
+        "Cerrar sin aplicar: <code>abandonar objetivo</code>."
+    )
+    return "\n".join(lines)
+
+
+def format_campaign_started(progress: CampaignProgress, gap: GapAnalysis) -> str:
+    verdict = _VERDICT_LABELS.get(gap.verdict, gap.verdict)
+    lines = [
+        "<b>Objetivo del mes fijado.</b>",
+        f"Brecha hoy: {escape_text(verdict)}.",
+    ]
+    if gap.missing:
+        lines.append("Lo que el mes tiene que cerrar:")
+        lines.extend(
+            f"❌ {escape_text(compact_text(item, 160))}" for item in gap.missing[:6]
+        )
+    lines.append("")
+    lines.append(format_campaign(progress))
+    return "\n".join(lines)
+
+
+def format_campaign_item_done(
+    progress: CampaignProgress, item: CampaignPlanItem
+) -> str:
+    campaign = progress.campaign
+    lines = [
+        f"<b>Pieza {item.n} cerrada:</b> {escape_text(item.title)}",
+        f"{progress.done}/{progress.total} piezas · "
+        f"{progress.days_left} días para aplicar.",
+    ]
+    if item.kind is PlanItemKind.APPLY:
+        lines.append("")
+        lines.append(
+            "Objetivo del mes cumplido: aplicaste con la brecha trabajada. "
+            f"Registra la vacante: <code>aplicado {campaign.lead_id}</code>."
+        )
+        return "\n".join(lines)
+    if item.kind is PlanItemKind.BUILD:
+        lines.append(
+            "Un build sin post es evidencia invisible. Si el plan tiene el post, "
+            "es el siguiente; si no, <code>github_insights</code> y lo armamos."
+        )
+    if progress.next_items:
+        nxt = progress.next_items[0]
+        lines.append(f"Siguiente: {nxt.n}. {escape_text(nxt.title)}")
+    if not progress.pending_left:
+        lines.append(
+            "Solo queda aplicar: <code>brecha</code> y <code>cv</code> de cierre."
+        )
+    return "\n".join(lines)
+
+
+def format_friday_recap(report: RecapReport, *, scheduled: bool = False) -> str:
+    title = "<b>Recap de la semana</b>" if not scheduled else "<b>Recap de viernes</b>"
+    window = f"{report.since.strftime('%d %b')} – {report.now.strftime('%d %b')}"
+    lines = [title, escape_text(window), ""]
+
+    lines.append(f"<b>Posts</b> · {len(report.posts)} de {report.cadence_target}")
+    for post in report.posts[:3]:
+        headline = escape_text(compact_text(post.hook or post.body, 90))
+        link = (
+            f' · <a href="{escape_text(post.published_url)}">ver</a>'
+            if post.published_url
+            else ""
+        )
+        lines.append(f"• {headline}{link}")
+    lines.append("")
+
+    realistic = [lead for lead in report.applied if not lead.dream]
+    dream = [lead for lead in report.applied if lead.dream]
+    lines.append(
+        f"<b>Aplicaciones</b> · {len(realistic)} realistas · {len(dream)} ambiciosas"
+    )
+    for lead in report.applied[:4]:
+        company = f" · {escape_text(lead.company)}" if lead.company else ""
+        lines.append(
+            f"• #{lead.id} {escape_text(compact_text(lead.title, 70))}{company}"
+        )
+    for lead in report.moved[:4]:
+        label = _JOB_STATUS_LABELS.get(lead.status, lead.status.value)
+        lines.append(
+            f"• #{lead.id} pasó a {label}: {escape_text(compact_text(lead.title, 60))}"
+        )
+    lines.append("")
+
+    lines.append(
+        f"<b>Radar</b> · {report.new_realistic} realistas nuevas · "
+        f"{report.new_dream} ambiciosas nuevas esta semana"
+    )
+    lines.append("")
+
+    if report.campaign is not None:
+        progress = report.campaign
+        lines.append(
+            f"<b>Objetivo del mes</b> · semana {progress.week_number} de 4 · "
+            f"{progress.done}/{progress.total} piezas · {progress.days_left} días"
+        )
+        for item in progress.done_this_week[:3]:
+            lines.append(f"✅ {escape_text(item.title)}")
+        for item in progress.next_items[:2]:
+            lines.append(f"⬜ {item.n}. {escape_text(item.title)}")
+        lines.append("")
+    else:
+        lines.append(
+            "<b>Objetivo del mes</b> · ninguno. <code>objetivo &lt;id&gt;</code>"
+        )
+        lines.append("")
+
+    if report.commits_by_repo:
+        parts = [
+            f"{escape_text(repo.split('/')[-1])} {count}"
+            for repo, count in report.commits_by_repo.items()
+        ]
+        lines.append("<b>Repos</b> · commits: " + " · ".join(parts))
+        lines.append("")
+
+    lines.append(f"<b>Lectura honesta</b> · {report.score:.1f}/3")
+    lines.append(escape_text(report.verdict))
+    lines.append(escape_text("; ".join(report.reasons) + "."))
     return "\n".join(lines)

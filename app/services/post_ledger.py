@@ -211,7 +211,7 @@ async def cadence_status(
 ) -> CadenceStatus:
     moment = _now(now)
     since = stamp(moment - timedelta(days=7))
-    published = await count_linkedin_posts_published_since(db, since)
+    published = await count_linkedin_posts_published_since(db, since, stamp(moment))
     last_raw = await get_last_published_at(db)
     unpublished_rows = await get_recent_linkedin_posts(
         db, limit=5, status=PostStatus.GENERATED.value

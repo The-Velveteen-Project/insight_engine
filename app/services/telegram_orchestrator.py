@@ -59,6 +59,7 @@ from app.services import (
     discovery_service,
     draft_generator,
     editorial_planner,
+    friday_recap,
     github_insight_service,
     handoff_followups,
     job_radar,
@@ -66,6 +67,7 @@ from app.services import (
     mvp_handoff,
     post_ledger,
 )
+from app.services import campaign as campaign_service
 from app.services.generation import get_weekly_thesis_generator
 from app.utils import telegram_formatting
 
@@ -197,6 +199,31 @@ _PIPELINE_RE = re.compile(
     r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)\s*[?¿!]*\s*$",
     re.I,
 )
+_CAMPAIGN_START_RE = re.compile(
+    r"^(?:mi\s+|el\s+|nuevo\s+)?(?:objetivo|campa[nñ]a)(?:\s+del\s+mes)?\s+"
+    r"(?:es\s+|con\s+|para\s+)?(?:la\s+)?(?:vacante\s+|lead\s+)?#?(?P<id>\d+)\s*[.!]*\s*$",
+    re.I,
+)
+_CAMPAIGN_STATUS_RE = re.compile(
+    r"^(?:c[oó]mo\s+voy\s+con\s+)?(?:mi\s+|el\s+)?(?:objetivo|campa[nñ]a)"
+    r"(?:\s+del\s+mes)?\s*[?¿!]*\s*$",
+    re.I,
+)
+_CAMPAIGN_DONE_RE = re.compile(
+    r"^(?:ya\s+)?(?:hecho|listo|termin[eé]|hice|cerr[eé])\s+(?:el\s+|la\s+|con\s+el\s+)?"
+    r"(?:[ií]tem\s+|pieza\s+|punto\s+)?#?(?P<n>\d+)(?P<rest>.*)$",
+    re.I,
+)
+_CAMPAIGN_ABANDON_RE = re.compile(
+    r"^(?:abandona(?:r)?|cancela(?:r)?|cierra)\s+(?:el\s+|mi\s+)?(?:objetivo|campa[nñ]a)"
+    r"(?:\s+del\s+mes)?\s*[.!]*\s*$",
+    re.I,
+)
+_RECAP_RE = re.compile(
+    r"^(?:recap|resumen\s+de\s+la\s+semana|c[oó]mo\s+(?:fue|estuvo)\s+(?:la\s+|mi\s+)?semana|"
+    r"balance\s+semanal|recap\s+de\s+la\s+semana)\s*[?¿!]*\s*$",
+    re.I,
+)
 _GAP_RE = re.compile(
     r"^(?:analiza(?:me)?\s+|mira\s+|dame\s+)?"
     r"(?:mi\s+|la\s+|el\s+)?(?:brecha|fit|gap|ajuste)\s+"
@@ -306,6 +333,13 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "fit": CommandName.GAP,
     "cv": CommandName.CV,
     "cv_master": CommandName.CV_MASTER,
+    "objetivo": CommandName.CAMPAIGN,
+    "campaña": CommandName.CAMPAIGN,
+    "campana": CommandName.CAMPAIGN,
+    "hecho": CommandName.CAMPAIGN_DONE,
+    "listo": CommandName.CAMPAIGN_DONE,
+    "abandonar_objetivo": CommandName.CAMPAIGN_ABANDON,
+    "recap": CommandName.RECAP,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -855,6 +889,28 @@ def _natural_command(
         return ParsedTelegramCommand(
             name=CommandName.PIPELINE,
             query=None,
+            raw_text=text,
+        )
+    if _RECAP_RE.match(stripped):
+        return ParsedTelegramCommand(name=CommandName.RECAP, query=None, raw_text=text)
+    if _CAMPAIGN_ABANDON_RE.match(stripped):
+        return ParsedTelegramCommand(
+            name=CommandName.CAMPAIGN_ABANDON, query=None, raw_text=text
+        )
+    campaign_start = _CAMPAIGN_START_RE.match(stripped)
+    if campaign_start is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.CAMPAIGN, query=campaign_start.group("id"), raw_text=text
+        )
+    if _CAMPAIGN_STATUS_RE.match(stripped):
+        return ParsedTelegramCommand(
+            name=CommandName.CAMPAIGN, query=None, raw_text=text
+        )
+    campaign_done = _CAMPAIGN_DONE_RE.match(stripped)
+    if campaign_done is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.CAMPAIGN_DONE,
+            query=f"{campaign_done.group('n')} {campaign_done.group('rest')}".strip(),
             raw_text=text,
         )
     gap_match = _GAP_RE.match(stripped)
@@ -1952,6 +2008,59 @@ async def handle_command(
     if command.name == CommandName.PIPELINE:
         grouped = await job_radar.pipeline(db)
         return telegram_formatting.format_pipeline(grouped)
+
+    if command.name == CommandName.RECAP:
+        recap_report = await friday_recap.build_recap(db)
+        return telegram_formatting.format_friday_recap(recap_report)
+
+    if command.name == CommandName.CAMPAIGN:
+        lead_id, _ = _parse_lead_args(command.query or "")
+        if lead_id is None:
+            active = await campaign_service.current(db)
+            if active is None:
+                return telegram_formatting.format_no_campaign()
+            return telegram_formatting.format_campaign(
+                campaign_service.progress(active)
+            )
+        try:
+            started, gap = await campaign_service.start(db, lead_id)
+        except cv_tailor.MasterCVMissing:
+            return telegram_formatting.format_cv_master_missing()
+        except LookupError:
+            return _not_found("Vacante", lead_id)
+        except RuntimeError as exc:
+            detail = telegram_formatting.escape_text(str(exc))
+            return f"No pude armar el objetivo del mes: {detail}"
+        return telegram_formatting.format_campaign_started(
+            campaign_service.progress(started), gap
+        )
+
+    if command.name == CommandName.CAMPAIGN_DONE:
+        item_n, note = _parse_lead_args(command.query or "")
+        if item_n is None:
+            return "<b>Uso:</b> <code>hecho &lt;n&gt; [url de la evidencia]</code>"
+        url, _ = _parse_published_args(note or "")
+        try:
+            refreshed, done_item = await campaign_service.mark_done(
+                db, item_n, evidence_url=url
+            )
+        except campaign_service.NoActiveCampaign:
+            return telegram_formatting.format_no_campaign()
+        except LookupError as exc:
+            return telegram_formatting.escape_text(str(exc))
+        return telegram_formatting.format_campaign_item_done(
+            campaign_service.progress(refreshed), done_item
+        )
+
+    if command.name == CommandName.CAMPAIGN_ABANDON:
+        try:
+            closed = await campaign_service.abandon(db)
+        except campaign_service.NoActiveCampaign:
+            return telegram_formatting.format_no_campaign()
+        return (
+            f"<b>Objetivo del mes cerrado</b> sin aplicar: vacante #{closed.lead_id}. "
+            "Cuando quieras otro, <code>objetivo &lt;id&gt;</code>."
+        )
 
     if command.name == CommandName.CV_MASTER:
         try:

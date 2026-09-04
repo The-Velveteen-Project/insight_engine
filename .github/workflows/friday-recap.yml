@@ -1,0 +1,23 @@
+name: Friday Recap
+
+on:
+  schedule:
+    # Fridays at 21:00 UTC (16:00 in Colombia): posts, applications, radar,
+    # monthly campaign progress and an honest verdict for the week.
+    - cron: "0 21 * * 5"
+  workflow_dispatch:
+
+jobs:
+  friday-recap:
+    name: Friday Recap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger friday recap
+        run: |
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/run-friday-recap" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 170
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}

@@ -32,6 +32,7 @@ from app.prompts.handoff_match import (
     build_handoff_match_prompt,
 )
 from app.prompts.job_details import JOB_DETAILS_SYSTEM_PROMPT, build_job_details_prompt
+from app.schemas.campaign import GeneratedCampaignPlan
 from app.schemas.cv import GapAnalysis, TailoredCV
 from app.schemas.drafts import DraftGenerationInput, EditorialDraftContent
 from app.schemas.editorial import (
@@ -341,6 +342,41 @@ class OpenAICVWriter:
             max_tokens=2600,
             temperature=0.3,
         )
+
+
+class OpenAICampaignPlanner:
+    """Gap analysis -> four-week plan (GeneratedCampaignPlan)."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: float) -> None:
+        self._client = build_async_openai_client(
+            api_key=api_key, timeout_seconds=timeout_seconds
+        )
+        self._model = model
+
+    async def generate(self, *, system: str, user: str) -> GeneratedCampaignPlan | None:
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=system,
+            user=user,
+            response_cls=GeneratedCampaignPlan,
+            max_tokens=1600,
+            temperature=0.3,
+        )
+
+
+_campaign_planner: OpenAICampaignPlanner | None = None
+
+
+def get_campaign_planner() -> OpenAICampaignPlanner | None:
+    global _campaign_planner
+    if _campaign_planner is None and settings.openai_api_key:
+        _campaign_planner = OpenAICampaignPlanner(
+            api_key=settings.openai_api_key,
+            model=settings.editorial_model,
+            timeout_seconds=settings.cv_timeout_seconds,
+        )
+    return _campaign_planner
 
 
 _gap_analyst: OpenAIGapAnalyst | None = None

@@ -376,6 +376,23 @@ The active goal is a job, so the operator also watches the market.
 - generated LinkedIn posts default to English (`LINKEDIN_LANGUAGE`), with
   Carlos's own published posts as voice exemplars in the writer prompt
 
+## Monthly Campaign And Friday Recap
+
+The full loop the system exists for: the gap says what is missing, the month
+builds it and makes it visible, the application arrives with new evidence.
+
+- `objetivo <id>` turns one ambitious lead into a four-week plan (builds,
+  posts, at most one study item, one application item in week 4), each item
+  naming the gap it closes; a single active campaign at a time
+- `objetivo` shows progress; `hecho <n> <url>` marks an item done with its
+  evidence; `abandonar objetivo` closes without applying
+- `recap` (and a Friday cron) reports posts published, applications moved,
+  new leads by league, campaign progress, commits in the priority repos, and
+  a deterministic verdict out of 3 with the reasons spelled out. No model
+  call: honest and cheap
+- `jobs realista` / `jobs ambicioso` split the radar into two leagues so
+  dream companies never bury the roles to apply to this week
+
 ## Main Working Loops
 
 ### Editorial loop

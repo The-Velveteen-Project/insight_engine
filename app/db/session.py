@@ -199,6 +199,22 @@ CREATE TABLE IF NOT EXISTS job_leads (
 )
 """
 
+# Phase 3: one ambitious lead turned into a four-week plan. A single active
+# campaign at a time; starting a new one abandons the previous.
+_CREATE_CAMPAIGNS = """
+CREATE TABLE IF NOT EXISTS campaigns (
+    id              INTEGER   PRIMARY KEY AUTOINCREMENT,
+    lead_id         INTEGER   NOT NULL REFERENCES job_leads(id),
+    goal_id         INTEGER   REFERENCES active_goals(id),
+    status          TEXT      NOT NULL DEFAULT 'active'
+                              CHECK (status IN ('active', 'applied', 'abandoned')),
+    started_at      TIMESTAMP NOT NULL,
+    target_apply_at TIMESTAMP NOT NULL,
+    plan_json       TEXT      NOT NULL,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
 # Small key/value store for operator bookkeeping (last cadence reminder, etc.).
 _CREATE_OPERATOR_STATE = """
 CREATE TABLE IF NOT EXISTS operator_state (
@@ -294,6 +310,7 @@ async def init_db() -> None:
         await db.execute(_CREATE_HANDOFF_FOLLOWUPS)
         await db.execute(_CREATE_LINKEDIN_POSTS)
         await db.execute(_CREATE_JOB_LEADS)
+        await db.execute(_CREATE_CAMPAIGNS)
         await db.execute(_CREATE_OPERATOR_STATE)
         for stmt in _CREATE_INDEXES:
             await db.execute(stmt)

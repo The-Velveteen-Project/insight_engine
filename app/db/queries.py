@@ -768,14 +768,15 @@ async def get_recent_linkedin_posts(
 
 
 async def count_linkedin_posts_published_since(
-    db: aiosqlite.Connection, since: str
+    db: aiosqlite.Connection, since: str, until: str | None = None
 ) -> int:
     cursor = await db.execute(
         """
         SELECT COUNT(*) FROM linkedin_posts
         WHERE status = 'published' AND published_at >= ?
+          AND (? IS NULL OR published_at <= ?)
         """,
-        (since,),
+        (since, until, until),
     )
     row = await cursor.fetchone()
     return int(row[0]) if row is not None else 0
@@ -1082,6 +1083,145 @@ async def get_job_lead_gap_json(db: aiosqlite.Connection, lead_id: int) -> str |
     if row is None or row[0] is None:
         return None
     return str(row[0])
+
+
+async def list_job_leads_applied_since(
+    db: aiosqlite.Connection, since: str
+) -> list[aiosqlite.Row]:
+    cursor = await db.execute(
+        """
+        SELECT * FROM job_leads
+        WHERE applied_at IS NOT NULL AND applied_at >= ?
+        ORDER BY applied_at DESC
+        """,
+        (since,),
+    )
+    return list(await cursor.fetchall())
+
+
+async def list_job_leads_moved_since(
+    db: aiosqlite.Connection, since: str
+) -> list[aiosqlite.Row]:
+    """Leads whose status changed to interview/offer/rejected this window."""
+    cursor = await db.execute(
+        """
+        SELECT * FROM job_leads
+        WHERE status IN ('interview', 'offer', 'rejected')
+          AND updated_at >= ?
+        ORDER BY updated_at DESC
+        """,
+        (since,),
+    )
+    return list(await cursor.fetchall())
+
+
+async def count_job_leads_found_since(
+    db: aiosqlite.Connection, since: str
+) -> tuple[int, int]:
+    """(realistic, dream) leads found in the window, excluding dismissed."""
+    cursor = await db.execute(
+        """
+        SELECT dream, COUNT(*) FROM job_leads
+        WHERE found_at >= ? AND status != 'dismissed'
+        GROUP BY dream
+        """,
+        (since,),
+    )
+    realistic = dream = 0
+    for row in await cursor.fetchall():
+        if int(row[0] or 0):
+            dream = int(row[1])
+        else:
+            realistic = int(row[1])
+    return realistic, dream
+
+
+async def list_linkedin_posts_published_since(
+    db: aiosqlite.Connection, since: str
+) -> list[aiosqlite.Row]:
+    cursor = await db.execute(
+        """
+        SELECT * FROM linkedin_posts
+        WHERE status = 'published' AND published_at >= ?
+        ORDER BY published_at DESC
+        """,
+        (since,),
+    )
+    return list(await cursor.fetchall())
+
+
+# ---------------------------------------------------------------------------
+# Campaigns (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+async def insert_campaign(
+    db: aiosqlite.Connection,
+    *,
+    lead_id: int,
+    goal_id: int | None,
+    started_at: str,
+    target_apply_at: str,
+    plan_json: str,
+) -> int:
+    cursor = await db.execute(
+        """
+        INSERT INTO campaigns (
+            lead_id, goal_id, started_at, target_apply_at, plan_json
+        )
+        VALUES (?, ?, ?, ?, ?)
+        """,
+        (lead_id, goal_id, started_at, target_apply_at, plan_json),
+    )
+    await db.commit()
+    assert cursor.lastrowid is not None
+    return cursor.lastrowid
+
+
+async def get_active_campaign(db: aiosqlite.Connection) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        """
+        SELECT c.*, j.title AS lead_title, j.company AS lead_company
+        FROM campaigns c JOIN job_leads j ON j.id = c.lead_id
+        WHERE c.status = 'active'
+        ORDER BY c.id DESC LIMIT 1
+        """
+    )
+    return await cursor.fetchone()
+
+
+async def get_campaign_by_id(
+    db: aiosqlite.Connection, campaign_id: int
+) -> aiosqlite.Row | None:
+    cursor = await db.execute(
+        """
+        SELECT c.*, j.title AS lead_title, j.company AS lead_company
+        FROM campaigns c JOIN job_leads j ON j.id = c.lead_id
+        WHERE c.id = ?
+        """,
+        (campaign_id,),
+    )
+    return await cursor.fetchone()
+
+
+async def update_campaign_plan(
+    db: aiosqlite.Connection, *, campaign_id: int, plan_json: str
+) -> None:
+    await db.execute(
+        "UPDATE campaigns SET plan_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (plan_json, campaign_id),
+    )
+    await db.commit()
+
+
+async def update_campaign_status(
+    db: aiosqlite.Connection, *, campaign_id: int, status: str
+) -> None:
+    await db.execute(
+        "UPDATE campaigns SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (status, campaign_id),
+    )
+    await db.commit()
 
 
 async def count_job_leads_by_status(db: aiosqlite.Connection) -> dict[str, int]:

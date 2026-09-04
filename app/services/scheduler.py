@@ -18,7 +18,7 @@ import aiosqlite
 
 from app.core.config import settings
 from app.integrations.telegram_client import send_message
-from app.services import job_radar, post_ledger, telegram_orchestrator
+from app.services import friday_recap, job_radar, post_ledger, telegram_orchestrator
 from app.utils import telegram_formatting
 
 logger = logging.getLogger(__name__)
@@ -158,6 +158,20 @@ async def run_job_radar_job() -> None:
     await send_message(
         settings.telegram_admin_chat_id,
         telegram_formatting.format_job_radar(radar, scheduled=True),
+    )
+
+
+async def run_friday_recap_job() -> None:
+    """Weekly recap: posts, applications, radar, campaign, repos, verdict."""
+    if settings.telegram_admin_chat_id <= 0:
+        logger.info("Friday recap skipped: TELEGRAM_ADMIN_CHAT_ID not configured.")
+        return
+    async with aiosqlite.connect(settings.db_path) as db:
+        db.row_factory = aiosqlite.Row
+        report = await friday_recap.build_recap(db)
+    await send_message(
+        settings.telegram_admin_chat_id,
+        telegram_formatting.format_friday_recap(report, scheduled=True),
     )
 
 
