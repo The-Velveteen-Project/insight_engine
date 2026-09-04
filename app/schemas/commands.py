@@ -46,6 +46,7 @@ class CommandName(StrEnum):
     CAMPAIGN_DONE = "hecho"
     CAMPAIGN_ABANDON = "abandonar_objetivo"
     RECAP = "recap"
+    READ_URL = "leer"
     COLUMN = "columna"
     FINDING = "hallazgo"
     PROJECT = "proyecto"

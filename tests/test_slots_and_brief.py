@@ -277,3 +277,67 @@ async def test_internal_post_proposal_route(client) -> None:
         )
     mock_run.assert_awaited_once_with("hallazgo")
     assert response.json()["job"] == "post_proposal"
+
+
+async def test_pasted_url_becomes_signal_then_long_opinion_post(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    from app.services import url_reader
+
+    page = ("GPT-6 Astra is a new model. " * 40).strip()
+    monkeypatch.setattr(
+        "app.services.url_reader.fetch_page",
+        AsyncMock(return_value=("GPT-6 Astra", page)),
+    )
+    read = await handle_operator_text(
+        "https://openai.com/index/gpt-6-astra/", db, chat_id=8200
+    )
+    assert read is not None
+    assert "Leído · señal #" in read and "GPT-6 Astra" in read
+    assert_valid_telegram_html(read)
+
+    long_opinion = (
+        "Mi lectura es que el salto no está en el modelo sino en " * 30
+    ).strip()
+    assert len(long_opinion) > 1000
+    post = LinkedInPost(
+        hook="The leap is not in the model; it is in what we let it decide.",
+        body_paragraphs=["Uno.", "Dos."],
+        closing="Where do you draw the line between interpretation and decision?",
+        hashtags=[],
+    )
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
+        AsyncMock(return_value=(post, True, [("GPT-6 Astra", "https://openai.com/x")])),
+    ) as writer:
+        text = await handle_operator_text(
+            f"columna 1: {long_opinion}", db, chat_id=8200
+        )
+    assert text is not None and "post #" in text
+    assert writer.await_args.kwargs["founder_opinion"] == long_opinion
+
+    with patch(
+        "app.services.telegram_orchestrator.linkedin_writer.build_linkedin_post",
+        AsyncMock(return_value=(post, True, [])),
+    ) as writer2:
+        combined = await handle_operator_text(
+            "https://openai.com/index/gpt-6-astra/ y mi opinión va aquí en varias líneas",
+            db,
+            chat_id=8201,
+        )
+    assert combined is not None and "post #" in combined
+    assert writer2.await_args.kwargs["founder_opinion"] == (
+        "y mi opinión va aquí en varias líneas"
+    )
+    assert url_reader is not None
+
+
+def test_strip_html_extracts_title_and_text() -> None:
+    from app.services.url_reader import _strip_html
+
+    title, text = _strip_html(
+        "<html><head><title>GPT-6 &amp; Astra</title><script>x()</script></head>"
+        "<body><h1>Hello</h1><p>World <b>bold</b></p></body></html>"
+    )
+    assert title == "GPT-6 & Astra"
+    assert text == "GPT-6 & Astra Hello World bold"

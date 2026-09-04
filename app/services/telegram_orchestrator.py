@@ -67,6 +67,7 @@ from app.services import (
     linkedin_writer,
     mvp_handoff,
     post_ledger,
+    url_reader,
 )
 from app.services import campaign as campaign_service
 from app.services.generation import get_weekly_thesis_generator
@@ -100,6 +101,7 @@ _DISCOVERY_LABELS: dict[str, str] = {
     "github": "GitHub REST",
     "exa": "Exa Neural Search",
     "rss": "Blogs RSS",
+    "url": "Enlace que me enviaste",
 }
 _LINKEDIN_PROMPT_RE = re.compile(
     r"^(?:dame|sacame|preparame)?\s*(?:el\s+)?prompt\s+"
@@ -200,6 +202,11 @@ _PIPELINE_RE = re.compile(
     r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)"
     r"(?:\s+(?P<lane>realistas?|ambicios[oa]s?))?\s*[?¿!]*\s*$",
     re.I,
+)
+_READ_URL_RE = re.compile(
+    r"^(?:(?:lee|leer|mira|lectura|opina(?:r)?\s+sobre|columna|hallazgo)\s*[:\-]?\s*)?"
+    r"(?P<url>https?://\S+)\s*(?P<rest>.*)$",
+    re.I | re.S,
 )
 _SLOT_RE = re.compile(
     r"^(?P<slot>columna|hallazgo)(?:\s+(?:del?\s+)?(?:la\s+)?"
@@ -433,7 +440,7 @@ def invalidate_cached_state(chat_id: int) -> None:
 
 @dataclass(frozen=True)
 class _CandidateRef:
-    source_type: Literal["arxiv", "hackernews", "github", "exa", "rss"]
+    source_type: Literal["arxiv", "hackernews", "github", "exa", "rss", "url"]
     source_id: str
     title: str
     url: str
@@ -1021,6 +1028,14 @@ def _natural_command(
         )
     if _RECAP_RE.match(stripped):
         return ParsedTelegramCommand(name=CommandName.RECAP, query=None, raw_text=text)
+    url_match = _READ_URL_RE.match(stripped)
+    if url_match is not None:
+        rest = (url_match.group("rest") or "").strip(" :-–\n")
+        return ParsedTelegramCommand(
+            name=CommandName.READ_URL,
+            query=f"{url_match.group('url').rstrip('.,;)')} {rest}".strip(),
+            raw_text=text,
+        )
     project_match = _PROJECT_RE.match(stripped)
     if project_match is not None:
         return ParsedTelegramCommand(
@@ -2161,12 +2176,31 @@ async def handle_command(
         recap_report = await friday_recap.build_recap(db)
         return telegram_formatting.format_friday_recap(recap_report)
 
+    if command.name == CommandName.READ_URL:
+        read_url, _, read_rest = (command.query or "").partition(" ")
+        read_opinion = read_rest.strip() or None
+        if not read_url.lower().startswith(("http://", "https://")):
+            return "<b>Uso:</b> pega un enlace, opcionalmente seguido de tu opinión."
+        try:
+            read_signal_id, candidate = await url_reader.read_and_store(
+                db, read_url, message_id=message_id
+            )
+        except url_reader.UnreadableUrl as exc:
+            return telegram_formatting.escape_text(str(exc))
+        _remember_signal_ids(chat_id, [read_signal_id])
+        await _persist_state(db, chat_id)
+        if read_opinion:
+            return await _post_chain(
+                db, chat_id, signal_id=read_signal_id, opinion=read_opinion
+            )
+        return telegram_formatting.format_url_read(candidate, signal_id=read_signal_id)
+
     if command.name in (CommandName.COLUMN, CommandName.FINDING):
         slot = "columna" if command.name is CommandName.COLUMN else "hallazgo"
-        target, opinion = _split_slot_query(command.query)
+        target, slot_opinion = _split_slot_query(command.query)
         if target is None:
             return await build_post_proposal(
-                db, chat_id, slot=slot, topic=opinion, message_id=message_id
+                db, chat_id, slot=slot, topic=slot_opinion, message_id=message_id
             )
         slot_state = _get_state(chat_id)
         signal_id: int | None
@@ -2184,7 +2218,7 @@ async def handle_command(
                 "No tengo esa señal en contexto. Pide primero "
                 f"<code>{slot}</code> y luego <code>{slot} 1: tu opinión</code>."
             )
-        return await _post_chain(db, chat_id, signal_id=signal_id, opinion=opinion)
+        return await _post_chain(db, chat_id, signal_id=signal_id, opinion=slot_opinion)
 
     if command.name == CommandName.PROJECT:
         item_n, _ = _parse_lead_args(command.query or "")

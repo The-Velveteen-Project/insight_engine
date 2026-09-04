@@ -24,6 +24,7 @@ from app.schemas.commands import (
     WeeklySummary,
 )
 from app.schemas.cv import GapAnalysis, TailoredCV
+from app.schemas.discovery import SignalCandidate
 from app.schemas.drafts import PersistedEditorialDraft
 from app.schemas.editorial import (
     EditorialPlanStatus,
@@ -1947,4 +1948,22 @@ def format_project_brief_delivered(
     else:
         lines.append(f"<pre>{escape_text(markdown)}</pre>")
     lines.append(f"Cuando termines: <code>hecho {item.n} &lt;url del repo&gt;</code>.")
+    return "\n".join(lines)
+
+
+def format_url_read(candidate: SignalCandidate, *, signal_id: int) -> str:
+    """A pasted link, read and stored, with the one-line column command."""
+    lines = [
+        f"<b>Leído · señal #{signal_id}</b>",
+        f"<b>{escape_text(compact_text(candidate.title, 140))}</b>",
+        escape_text(compact_text(candidate.summary, 600)),
+        f'↗ <a href="{escape_text(str(candidate.url))}">abrir</a>',
+        "",
+        (
+            "Dame tu opinión con la extensión que quieras, en un mensaje que "
+            "empiece por <code>columna 1:</code>. La convierto en un post de "
+            "LinkedIn con tu voz como eje y el artículo como evidencia. "
+            "También puedes pegar enlace y opinión en un solo mensaje."
+        ),
+    ]
     return "\n".join(lines)
