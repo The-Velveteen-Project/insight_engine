@@ -114,6 +114,13 @@ class Settings(BaseSettings):
     cv_master_path: str = "data/cv_master.md"
     cv_timeout_seconds: float = 75.0
 
+    # Tuesday column and Thursday finding: default discovery queries when the
+    # proposal runs without a topic.
+    column_default_query: str = "AI agents scientific machine learning research systems"
+    finding_default_query: str = (
+        "stochastic modeling bioinformatics foundation models forecasting"
+    )
+
     # Phase 1 cadence: how many published posts per week the operator expects,
     # and how long it waits before nagging again.
     post_cadence_per_week: int = 2

@@ -39,6 +39,7 @@ from app.schemas.linkedin import (
     PostStatus,
 )
 from app.schemas.mvp_handoff import MvpHandoffPack
+from app.schemas.project import ProjectBrief
 from app.services.diagnostics import DiagReport
 
 if TYPE_CHECKING:
@@ -1890,4 +1891,60 @@ def format_league(lane: str, leads: list[JobLead]) -> str:
         "Antes de aplicar: <code>brecha &lt;id&gt;</code>. "
         "Para limpiar: <code>estado &lt;id&gt; descartado</code>."
     )
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Tuesday column, Thursday finding, project brief (Phase 3.5)
+# ---------------------------------------------------------------------------
+
+
+def append_slot_instructions(formatted: str, *, slot: str) -> str:
+    label = "columna" if slot == "columna" else "hallazgo"
+    lines = [
+        formatted,
+        "",
+        (
+            f"Para convertir una en post con tu voz: <code>{label} 1: tu opinión "
+            "en dos frases</code>. Hago plan, aprobación y post de LinkedIn en un "
+            "solo paso. Sin opinión también funciona, pero sale más plano."
+        ),
+    ]
+    return "\n".join(lines)
+
+
+def format_project_brief_delivered(
+    item: CampaignPlanItem,
+    brief: ProjectBrief,
+    markdown: str,
+    *,
+    sent_as_file: bool,
+) -> str:
+    lines = [
+        f"<b>Brief para Claude · pieza {item.n}</b>",
+        escape_text(brief.title),
+        "",
+        escape_text(compact_text(brief.objective, 400)),
+        "",
+        f"<b>Cierra:</b> {escape_text(compact_text(brief.closes_gap, 240))}",
+        f"<b>Etapas:</b> {len(brief.stages)} · "
+        + " → ".join(
+            escape_text(compact_text(stage.name, 40)) for stage in brief.stages
+        ),
+    ]
+    if brief.inputs_needed:
+        lines.append("")
+        lines.append("<b>Antes de arrancar, Claude necesita:</b>")
+        lines.extend(f"• {escape_text(x)}" for x in brief.inputs_needed[:6])
+    lines.append("")
+    if sent_as_file:
+        lines.append(
+            "El brief completo va como archivo: etapas con instrucciones de "
+            "investigación profunda, entregables, criterios de aceptación y el "
+            "prompt de arranque. Pégalo en Claude Code o en un Claude Project junto "
+            "con tu CV y el texto de la brecha."
+        )
+    else:
+        lines.append(f"<pre>{escape_text(markdown)}</pre>")
+    lines.append(f"Cuando termines: <code>hecho {item.n} &lt;url del repo&gt;</code>.")
     return "\n".join(lines)

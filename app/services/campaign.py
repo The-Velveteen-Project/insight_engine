@@ -26,6 +26,7 @@ from app.db.queries import (
     update_campaign_status,
 )
 from app.prompts.campaign import CAMPAIGN_SYSTEM_PROMPT, build_campaign_prompt
+from app.prompts.project import PROJECT_SYSTEM_PROMPT, build_project_prompt
 from app.schemas.campaign import (
     Campaign,
     CampaignPlan,
@@ -34,8 +35,10 @@ from app.schemas.campaign import (
     PlanItemKind,
 )
 from app.schemas.cv import GapAnalysis
+from app.schemas.project import ProjectBrief
 from app.services import active_goals, cv_tailor, job_radar
-from app.services.generation import get_campaign_planner
+from app.services.context_hub import get_static_context
+from app.services.generation import get_campaign_planner, get_project_brief_writer
 from app.services.post_ledger import parse_stamp, stamp
 
 logger = logging.getLogger(__name__)
@@ -199,6 +202,48 @@ async def abandon(db: aiosqlite.Connection) -> Campaign:
     row = await get_campaign_by_id(db, campaign.id)
     assert row is not None
     return _row_to_campaign(row)
+
+
+async def project_brief(
+    db: aiosqlite.Connection, item_n: int
+) -> tuple[Campaign, CampaignPlanItem, ProjectBrief, str]:
+    """Brief for one build item of the active campaign: (campaign, item, brief, md)."""
+    campaign = await current(db)
+    if campaign is None:
+        raise NoActiveCampaign("No hay objetivo del mes activo.")
+    item = next((it for it in campaign.plan.items if it.n == item_n), None)
+    if item is None:
+        raise LookupError(f"El plan no tiene un ítem {item_n}.")
+    if item.kind not in (PlanItemKind.BUILD, PlanItemKind.LEARN):
+        raise ValueError(
+            f"La pieza {item_n} es un {item.kind.value}; el brief es para builds."
+        )
+    gap = await cv_tailor.stored_gap(db, campaign.lead_id)
+    master = await cv_tailor.load_master(db)
+    writer = get_project_brief_writer()
+    if writer is None:
+        raise RuntimeError("OPENAI_API_KEY vacía: no puedo armar el brief.")
+    brief = await writer.generate(
+        system=PROJECT_SYSTEM_PROMPT,
+        user=build_project_prompt(
+            item_title=item.title,
+            item_why=item.why,
+            campaign_thesis=campaign.plan.thesis,
+            lead_title=campaign.lead_title,
+            company=campaign.company,
+            gap_text=_gap_text(gap) if gap is not None else "(no gap analysis stored)",
+            master_summary=master.text[:_MASTER_SUMMARY_CHARS],
+            velveteen_context=get_static_context()[:3000],
+        ),
+    )
+    if brief is None:
+        raise RuntimeError("El modelo no devolvió un brief válido.")
+    return campaign, item, brief, brief.render_markdown()
+
+
+def brief_filename(campaign: Campaign, item: CampaignPlanItem) -> str:
+    slug = "".join(ch if ch.isalnum() else "-" for ch in item.title.lower())[:40]
+    return f"brief_objetivo{campaign.id}_pieza{item.n}_{slug.strip('-')}.md"
 
 
 @dataclass(frozen=True)

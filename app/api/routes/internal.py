@@ -19,6 +19,7 @@ from app.services.scheduler import (
     run_cadence_reminder_job,
     run_friday_recap_job,
     run_job_radar_job,
+    run_post_proposal_job,
     run_weekly_mvp_scan_job,
     run_weekly_summary_job,
 )
@@ -80,6 +81,17 @@ async def run_job_radar(
     _require_internal_token(x_internal_token)
     await run_job_radar_job()
     return InternalJobResponse(status="ok", job="job_radar")
+
+
+@router.post("/run-post-proposal", response_model=InternalJobResponse)
+async def run_post_proposal(
+    x_internal_token: Annotated[str | None, Header()] = None,
+    slot: str | None = None,
+) -> InternalJobResponse:
+    _require_internal_token(x_internal_token)
+    resolved = slot if slot in ("columna", "hallazgo") else None
+    await run_post_proposal_job(resolved)
+    return InternalJobResponse(status="ok", job="post_proposal")
 
 
 @router.post("/run-friday-recap", response_model=InternalJobResponse)

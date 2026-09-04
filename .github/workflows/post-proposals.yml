@@ -1,0 +1,41 @@
+name: Post Proposals
+
+on:
+  schedule:
+    # Tuesday 12:00 UTC (07:00 Colombia): column candidates from blogs/news.
+    # Thursday 12:00 UTC: finding candidates from papers and Exa.
+    - cron: "0 12 * * 2"
+    - cron: "0 12 * * 4"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "columna or hallazgo"
+        required: false
+        default: "columna"
+        type: choice
+        options:
+          - columna
+          - hallazgo
+
+jobs:
+  propose:
+    name: Propose Post Candidates
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger post proposal
+        run: |
+          SLOT="${{ github.event.inputs.slot }}"
+          if [ -z "$SLOT" ]; then
+            case "$(date -u +%u)" in
+              2) SLOT="columna" ;;
+              4) SLOT="hallazgo" ;;
+              *) SLOT="columna" ;;
+            esac
+          fi
+          curl -s -X POST "${{ secrets.APP_URL }}/api/v1/internal/run-post-proposal?slot=${SLOT}" \
+            -H "X-Internal-Token: ${{ secrets.INTERNAL_CRON_SECRET }}" \
+            --fail \
+            --max-time 170
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          INTERNAL_CRON_SECRET: ${{ secrets.INTERNAL_CRON_SECRET }}

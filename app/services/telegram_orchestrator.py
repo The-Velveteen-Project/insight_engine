@@ -201,6 +201,17 @@ _PIPELINE_RE = re.compile(
     r"(?:\s+(?P<lane>realistas?|ambicios[oa]s?))?\s*[?¿!]*\s*$",
     re.I,
 )
+_SLOT_RE = re.compile(
+    r"^(?P<slot>columna|hallazgo)(?:\s+(?:del?\s+)?(?:la\s+)?"
+    r"(?P<target>primero|segundo|tercero|primera|segunda|tercera|#?\d+))?"
+    r"(?:\s*[:\-–]\s*|\s+)?(?P<rest>.*)$",
+    re.I | re.S,
+)
+_PROJECT_RE = re.compile(
+    r"^(?:proyecto|brief)(?:\s+(?:de\s+|del\s+|para\s+)?(?:la\s+)?"
+    r"(?:pieza\s+|[ií]tem\s+)?)?#?(?P<n>\d+)\s*[.!]*\s*$",
+    re.I,
+)
 _CAMPAIGN_START_RE = re.compile(
     r"^(?:mi\s+|el\s+|nuevo\s+)?(?:objetivo|campa[nñ]a)(?:\s+del\s+mes)?\s+"
     r"(?:es\s+|con\s+|para\s+)?(?:la\s+)?(?:vacante\s+|lead\s+)?#?(?P<id>\d+)\s*[.!]*\s*$",
@@ -344,6 +355,10 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "listo": CommandName.CAMPAIGN_DONE,
     "abandonar_objetivo": CommandName.CAMPAIGN_ABANDON,
     "recap": CommandName.RECAP,
+    "columna": CommandName.COLUMN,
+    "hallazgo": CommandName.FINDING,
+    "proyecto": CommandName.PROJECT,
+    "brief": CommandName.PROJECT,
 }
 _TARGET_PATTERNS: list[tuple[re.Pattern[str], CommandName]] = [
     (
@@ -622,6 +637,114 @@ def _parse_published_args(query: str) -> tuple[str | None, int | None]:
     return url, post_id
 
 
+_ORDINALS = {
+    "primero",
+    "primera",
+    "segundo",
+    "segunda",
+    "tercero",
+    "tercera",
+    "first",
+    "second",
+    "third",
+}
+
+
+def _split_slot_query(query: str | None) -> tuple[str | None, str | None]:
+    """ "1: mi opinión" -> ("1", "mi opinión"); "agentes" -> (None, "agentes")."""
+    raw = (query or "").strip()
+    if not raw:
+        return None, None
+    head, _, rest = raw.partition(" ")
+    token = head.strip(":-–").lower().lstrip("#")
+    if token.isdigit() or token in _ORDINALS:
+        target = (
+            token.rstrip("a") + "o"
+            if token in {"primera", "segunda", "tercera"}
+            else token
+        )
+        return target, rest.strip(" :-–") or None
+    return None, raw
+
+
+async def _post_chain(
+    db: aiosqlite.Connection,
+    chat_id: int | None,
+    *,
+    signal_id: int,
+    opinion: str | None,
+) -> str:
+    """signal -> plan -> approved -> LinkedIn post, in one step."""
+    current_goal = await active_goals.get_current(db)
+    try:
+        plan = await editorial_planner.create_persisted_editorial_plan(
+            db, [signal_id], goal_id=current_goal.id if current_goal else None
+        )
+    except LookupError:
+        return _not_found("Signal", signal_id)
+    plan = await editorial_planner.transition_editorial_plan(
+        db, plan.plan_id, EditorialPlanStatus.APPROVED
+    )
+    _remember_plan(chat_id, plan)
+    try:
+        post, llm_used, source_urls = await linkedin_writer.build_linkedin_post(
+            db, plan.plan_id, founder_opinion=opinion
+        )
+    except LookupError:
+        return _not_found("Plan", plan.plan_id)
+    post_id = await post_ledger.record_generated(
+        db,
+        plan_id=plan.plan_id,
+        chat_id=chat_id,
+        post=post,
+        llm_used=llm_used,
+        opinion_used=bool(opinion),
+    )
+    _remember_post(chat_id, post_id)
+    await _persist_state(db, chat_id)
+    return telegram_formatting.format_linkedin_post(
+        post,
+        plan_id=plan.plan_id,
+        llm_used=llm_used,
+        source_urls=source_urls,
+        opinion_used=bool(opinion),
+        post_id=post_id,
+    )
+
+
+async def build_post_proposal(
+    db: aiosqlite.Connection,
+    chat_id: int | None,
+    *,
+    slot: str,
+    topic: str | None = None,
+    message_id: int | None = None,
+) -> str:
+    """Tuesday column / Thursday finding: three candidates plus the one-line
+    command that turns one of them into a post with Carlos's opinion."""
+    if slot == "columna":
+        query = topic or settings.column_default_query
+        sources: tuple[str, ...] = ("rss", "hackernews", "exa")
+        heading = "Columna del martes · candidatos"
+    else:
+        query = topic or settings.finding_default_query
+        sources = ("arxiv", "exa")
+        heading = "Hallazgo del jueves · candidatos"
+    candidates, normalized_query = await _discover_refs(
+        db, query, source_names=sources, message_id=message_id
+    )
+    formatted = await _format_query_results(
+        db,
+        heading=_query_heading(heading, query, normalized_query),
+        candidates=candidates,
+        normalized_query=normalized_query,
+    )
+    suggestions = await _candidates_to_suggestions(db, candidates)
+    _remember_signal_ids(chat_id, _suggestion_signal_ids(suggestions))
+    await _persist_state(db, chat_id)
+    return telegram_formatting.append_slot_instructions(formatted, slot=slot)
+
+
 def _parse_lead_args(query: str) -> tuple[int | None, str | None]:
     """Split "aplicado 3 nota libre" into (lead_id, note)."""
     tokens = query.split(maxsplit=1)
@@ -898,6 +1021,22 @@ def _natural_command(
         )
     if _RECAP_RE.match(stripped):
         return ParsedTelegramCommand(name=CommandName.RECAP, query=None, raw_text=text)
+    project_match = _PROJECT_RE.match(stripped)
+    if project_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.PROJECT, query=project_match.group("n"), raw_text=text
+        )
+    slot_match = _SLOT_RE.match(stripped)
+    if slot_match is not None:
+        name = (
+            CommandName.COLUMN
+            if slot_match.group("slot").lower() == "columna"
+            else CommandName.FINDING
+        )
+        target = slot_match.group("target")
+        rest = (slot_match.group("rest") or "").strip()
+        query = f"{target} {rest}".strip() if target else (rest or None)
+        return ParsedTelegramCommand(name=name, query=query, raw_text=text)
     if _CAMPAIGN_ABANDON_RE.match(stripped):
         return ParsedTelegramCommand(
             name=CommandName.CAMPAIGN_ABANDON, query=None, raw_text=text
@@ -2021,6 +2160,66 @@ async def handle_command(
     if command.name == CommandName.RECAP:
         recap_report = await friday_recap.build_recap(db)
         return telegram_formatting.format_friday_recap(recap_report)
+
+    if command.name in (CommandName.COLUMN, CommandName.FINDING):
+        slot = "columna" if command.name is CommandName.COLUMN else "hallazgo"
+        target, opinion = _split_slot_query(command.query)
+        if target is None:
+            return await build_post_proposal(
+                db, chat_id, slot=slot, topic=opinion, message_id=message_id
+            )
+        slot_state = _get_state(chat_id)
+        signal_id: int | None
+        # "columna 2" means the second candidate just shown, not signal #2.
+        if (
+            target.isdigit()
+            and slot_state is not None
+            and 1 <= int(target) <= min(3, len(slot_state.last_signal_ids))
+        ):
+            signal_id = slot_state.last_signal_ids[int(target) - 1]
+        else:
+            signal_id = _resolve_signal_target(target, slot_state)
+        if signal_id is None:
+            return (
+                "No tengo esa señal en contexto. Pide primero "
+                f"<code>{slot}</code> y luego <code>{slot} 1: tu opinión</code>."
+            )
+        return await _post_chain(db, chat_id, signal_id=signal_id, opinion=opinion)
+
+    if command.name == CommandName.PROJECT:
+        item_n, _ = _parse_lead_args(command.query or "")
+        if item_n is None:
+            return (
+                "<b>Uso:</b> <code>proyecto &lt;n&gt;</code> con el número de la pieza."
+            )
+        try:
+            campaign, item, brief, markdown = await campaign_service.project_brief(
+                db, item_n
+            )
+        except campaign_service.NoActiveCampaign:
+            return telegram_formatting.format_no_campaign()
+        except cv_tailor.MasterCVMissing:
+            return telegram_formatting.format_cv_master_missing()
+        except (LookupError, ValueError) as exc:
+            return telegram_formatting.escape_text(str(exc))
+        except RuntimeError as exc:
+            detail = telegram_formatting.escape_text(str(exc))
+            return f"No pude armar el brief: {detail}"
+        sent_as_file = False
+        if chat_id is not None:
+            try:
+                await send_document(
+                    chat_id,
+                    filename=campaign_service.brief_filename(campaign, item),
+                    content=markdown.encode("utf-8"),
+                    caption=f"Brief para Claude · pieza {item.n}",
+                )
+                sent_as_file = True
+            except Exception as exc:
+                logger.warning("Brief send failed for item %s: %s", item_n, exc)
+        return telegram_formatting.format_project_brief_delivered(
+            item, brief, markdown, sent_as_file=sent_as_file
+        )
 
     if command.name == CommandName.CAMPAIGN:
         lead_id, _ = _parse_lead_args(command.query or "")

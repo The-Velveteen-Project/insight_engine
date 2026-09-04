@@ -12,7 +12,7 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import aiosqlite
 
@@ -159,6 +159,24 @@ async def run_job_radar_job() -> None:
         settings.telegram_admin_chat_id,
         telegram_formatting.format_job_radar(radar, scheduled=True),
     )
+
+
+async def run_post_proposal_job(slot: str | None = None) -> None:
+    """Tuesday column / Thursday finding candidates, sent to the admin chat.
+
+    With no explicit slot, Tuesday (and Mon/Wed) -> columna, Thursday and
+    later -> hallazgo, so the cron can call one endpoint on both days.
+    """
+    if settings.telegram_admin_chat_id <= 0:
+        logger.info("Post proposal skipped: TELEGRAM_ADMIN_CHAT_ID not configured.")
+        return
+    resolved = slot or ("columna" if datetime.now(UTC).weekday() < 3 else "hallazgo")
+    async with aiosqlite.connect(settings.db_path) as db:
+        db.row_factory = aiosqlite.Row
+        text = await telegram_orchestrator.build_post_proposal(
+            db, settings.telegram_admin_chat_id, slot=resolved
+        )
+    await send_message(settings.telegram_admin_chat_id, text)
 
 
 async def run_friday_recap_job() -> None:

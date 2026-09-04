@@ -43,6 +43,7 @@ from app.schemas.editorial import (
 )
 from app.schemas.goals import HandoffMatchInput, HandoffRepoMatch
 from app.schemas.jobs import JobPostingDetails
+from app.schemas.project import ProjectBrief
 
 logger = logging.getLogger(__name__)
 
@@ -363,6 +364,41 @@ class OpenAICampaignPlanner:
             max_tokens=1600,
             temperature=0.3,
         )
+
+
+class OpenAIProjectBriefWriter:
+    """Campaign build item -> ProjectBrief for Claude."""
+
+    def __init__(self, api_key: str, model: str, timeout_seconds: float) -> None:
+        self._client = build_async_openai_client(
+            api_key=api_key, timeout_seconds=timeout_seconds
+        )
+        self._model = model
+
+    async def generate(self, *, system: str, user: str) -> ProjectBrief | None:
+        return await _structured_completion(
+            self._client,
+            model=self._model,
+            system=system,
+            user=user,
+            response_cls=ProjectBrief,
+            max_tokens=4000,
+            temperature=0.3,
+        )
+
+
+_project_brief_writer: OpenAIProjectBriefWriter | None = None
+
+
+def get_project_brief_writer() -> OpenAIProjectBriefWriter | None:
+    global _project_brief_writer
+    if _project_brief_writer is None and settings.openai_api_key:
+        _project_brief_writer = OpenAIProjectBriefWriter(
+            api_key=settings.openai_api_key,
+            model=settings.editorial_model,
+            timeout_seconds=max(settings.cv_timeout_seconds, 120.0),
+        )
+    return _project_brief_writer
 
 
 _campaign_planner: OpenAICampaignPlanner | None = None
