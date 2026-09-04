@@ -26,6 +26,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 from urllib.parse import unquote, urlsplit
 
 import aiosqlite
@@ -220,9 +221,39 @@ class RadarOutcome:
     error: str | None = None
 
 
+Lane = Literal["realista", "ambicioso", "ambos"]
+
+# Two leagues, one goal. "realista" is where applications go every week;
+# "ambicioso" is the dream boards, one carefully prepared application a
+# month. Mixing them in one list let the dream league bury the real one.
+_REALISTIC_INLINE = 3
+_AMBITIOUS_INLINE = 3
+
+
+def parse_lane(text: str | None) -> tuple[Lane, str | None]:
+    """Split "realista", "ambicioso forecasting", "ambos" into (lane, topic)."""
+    raw = (text or "").strip()
+    if not raw:
+        return "ambos", None
+    tokens = raw.split()
+    head = tokens[0].lower().rstrip("s")
+    lane: Lane | None = None
+    if head in {"realista", "realist", "real"}:
+        lane = "realista"
+    elif head in {"ambicioso", "ambiciosa", "ambitious", "dream"}:
+        lane = "ambicioso"
+    elif head in {"ambo", "todo", "all"}:
+        lane = "ambos"
+    if lane is None:
+        return "ambos", raw
+    rest = " ".join(tokens[1:]).strip()
+    return lane, rest or None
+
+
 @dataclass
 class RadarResult:
     new_leads: list[JobLead] = field(default_factory=list)
+    lane: Lane = "ambos"
     already_known: int = 0
     below_fit: int = 0
     # Best of the discarded, so the operator can show what it judged and why.
@@ -232,6 +263,16 @@ class RadarResult:
     @property
     def all_failed(self) -> bool:
         return bool(self.outcomes) and all(o.failed for o in self.outcomes)
+
+    @property
+    def realistic(self) -> list[JobLead]:
+        leads = [lead for lead in self.new_leads if not lead.dream]
+        return sorted(leads, key=lambda lead: lead.fit_score, reverse=True)
+
+    @property
+    def ambitious(self) -> list[JobLead]:
+        leads = [lead for lead in self.new_leads if lead.dream]
+        return sorted(leads, key=lambda lead: lead.fit_score, reverse=True)
 
 
 def _row_to_lead(row: aiosqlite.Row) -> JobLead:
@@ -568,8 +609,14 @@ async def run_radar(
     *,
     query: str | None = None,
     now: datetime | None = None,
+    lane: Lane = "ambos",
 ) -> RadarResult:
-    """Search every configured query (or one ad-hoc query) and persist new leads."""
+    """Search the configured lane(s) (or one ad-hoc query) and persist new leads.
+
+    realista  -> Exa job boards only, dream companies excluded from the list.
+    ambicioso -> direct dream boards only (Anthropic, OpenAI, DeepMind, ...).
+    ambos     -> both, reported as two separate sections.
+    """
     moment = now or datetime.now(UTC)
     queries = (
         (query.strip(),) if query and query.strip() else settings.job_radar_query_list
@@ -578,14 +625,15 @@ async def run_radar(
         (moment - timedelta(days=max(settings.job_radar_days, 1))).date().isoformat()
     )
     domains = list(settings.job_radar_domain_list) or None
-    result = RadarResult()
+    result = RadarResult(lane=lane)
     seen_urls: set[str] = set()
 
     # Dream boards first; an ad-hoc `jobs <tema>` stays a pure search.
-    if not (query and query.strip()):
+    if lane != "realista" and not (query and query.strip()):
         await _run_boards(db, result, seen_urls)
 
-    for radar_query in queries:
+    exa_queries = queries if lane != "ambicioso" else ()
+    for radar_query in exa_queries:
         outcome = RadarOutcome(query=radar_query)
         try:
             hits = await exa_client.search(
@@ -628,12 +676,18 @@ async def run_radar(
 
     # Salary, country and requirements for the best new leads, inline. The
     # weekly cron enriches the rest so a chat command stays responsive.
-    result.new_leads.sort(key=lambda lead: (lead.dream, lead.fit_score), reverse=True)
+    if lane == "realista":
+        result.new_leads = [lead for lead in result.new_leads if not lead.dream]
+    to_enrich = [lead.id for lead in result.realistic[:_REALISTIC_INLINE]] + [
+        lead.id for lead in result.ambitious[:_AMBITIOUS_INLINE]
+    ]
     inline_limit = max(settings.job_enrich_inline_limit, 0)
-    for index, lead in enumerate(result.new_leads[:inline_limit]):
-        enriched = await enrich_lead(db, lead.id)
+    for lead_id in to_enrich[: max(inline_limit, len(to_enrich))]:
+        enriched = await enrich_lead(db, lead_id)
         if enriched is not None:
-            result.new_leads[index] = enriched
+            result.new_leads = [
+                enriched if lead.id == lead_id else lead for lead in result.new_leads
+            ]
 
     result.new_leads.sort(key=lambda lead: (lead.dream, lead.fit_score), reverse=True)
     result.below_fit_samples.sort(key=lambda c: c.fit_score, reverse=True)

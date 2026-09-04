@@ -105,6 +105,8 @@ def format_help() -> str:
             "• linkedin 4",
             "• publicado https://linkedin.com/posts/...",
             "• posts",
+            "• jobs realista · jobs ambicioso",
+            "• brecha 12 · cv 12",
             "• diag",
         ]
     )
@@ -1364,6 +1366,10 @@ def format_job_radar(result: RadarResult, *, scheduled: bool = False) -> str:
     title = "<b>Radar de vacantes</b>"
     if scheduled:
         title = "<b>Radar de vacantes · semanal</b>"
+    elif result.lane == "realista":
+        title = "<b>Radar de vacantes · liga realista</b>"
+    elif result.lane == "ambicioso":
+        title = "<b>Radar de vacantes · liga ambiciosa</b>"
     lines = [title]
     fetched = sum(outcome.fetched for outcome in result.outcomes)
     failed = [outcome for outcome in result.outcomes if outcome.failed]
@@ -1407,14 +1413,32 @@ def format_job_radar(result: RadarResult, *, scheduled: bool = False) -> str:
                     f'<a href="{escape_text(candidate.url)}">ver</a>'
                 )
         return "\n".join(lines)
-    for lead in result.new_leads[:6]:
-        lines.extend(_lead_lines(lead))
-    if len(result.new_leads) > 6:
-        lines.append(f"y {len(result.new_leads) - 6} más en <code>pipeline</code>.")
-    lines.append("")
+    realistic = result.realistic
+    ambitious = result.ambitious
+    if result.lane != "ambicioso":
+        lines.append("<b>Liga realista · aplica esta semana</b>")
+        if realistic:
+            for lead in realistic[:6]:
+                lines.extend(_lead_lines(lead))
+            if len(realistic) > 6:
+                lines.append(f"y {len(realistic) - 6} más en <code>pipeline</code>.")
+        else:
+            lines.append("Nada nuevo en esta liga esta vez.")
+        lines.append("")
+    if result.lane != "realista":
+        lines.append("<b>Liga ambiciosa · una aplicación al mes, bien preparada</b>")
+        if ambitious:
+            for lead in ambitious[:4]:
+                lines.extend(_lead_lines(lead, with_note=False))
+            if len(ambitious) > 4:
+                lines.append(f"y {len(ambitious) - 4} más en <code>pipeline</code>.")
+        else:
+            lines.append("Nada nuevo en las bolsas directas esta vez.")
+        lines.append("")
     lines.append(
         "Para mover una: <code>aplicado &lt;id&gt;</code>, "
-        "<code>estado &lt;id&gt; guardado|descartado</code>."
+        "<code>estado &lt;id&gt; guardado|descartado</code>. "
+        "Solo una liga: <code>jobs realista</code> o <code>jobs ambicioso</code>."
     )
     return "\n".join(lines)
 

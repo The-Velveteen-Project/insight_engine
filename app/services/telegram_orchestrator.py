@@ -177,6 +177,10 @@ _DISMISS_FOLLOWUP_RE = re.compile(
     r"dejalo|déjalo|cancelar|cancela|nada|nope)\s*$",
     re.I,
 )
+_MOOD_RE = re.compile(
+    r"^(?:hoy\s+)?(?:me\s+siento|estoy|modo)\s+(?P<lane>ambicios[oa]|realista)\s*[.!]*\s*$",
+    re.I,
+)
 _JOBS_RE = re.compile(
     r"^(?:busca(?:me)?\s+|buscar\s+)?"
     r"(?:vacantes|trabajos|ofertas(?:\s+de\s+trabajo)?|empleos|jobs)"
@@ -826,6 +830,13 @@ def _natural_command(
                 query=None,
                 raw_text=text,
             )
+    mood_match = _MOOD_RE.match(stripped)
+    if mood_match is not None:
+        return ParsedTelegramCommand(
+            name=CommandName.JOBS,
+            query=mood_match.group("lane").lower(),
+            raw_text=text,
+        )
     jobs_match = _JOBS_RE.match(stripped)
     if jobs_match is not None:
         return ParsedTelegramCommand(
@@ -1894,7 +1905,8 @@ async def handle_command(
         return telegram_formatting.format_goal_set(new_goal)
 
     if command.name == CommandName.JOBS:
-        radar = await job_radar.run_radar(db, query=command.query or None)
+        lane, topic = job_radar.parse_lane(command.query)
+        radar = await job_radar.run_radar(db, query=topic, lane=lane)
         return telegram_formatting.format_job_radar(radar)
 
     if command.name == CommandName.APPLIED:
@@ -1996,7 +2008,9 @@ async def handle_command(
                     chat_id,
                     filename=cv_tailor.cv_filename(lead, extension="docx"),
                     content=docx_bytes,
-                    caption="Misma versión en .docx, lista para editar o exportar a PDF.",
+                    caption=(
+                        "Misma versión en .docx, lista para editar o exportar a PDF."
+                    ),
                     mime_type=(
                         "application/vnd.openxmlformats-officedocument"
                         ".wordprocessingml.document"

@@ -321,3 +321,57 @@ async def test_lead_detail_without_text_is_honest(db: aiosqlite.Connection) -> N
     )
     detail = await handle_command(f"/vacante {lead_id}", db)
     assert "No tengo el texto de la oferta" in detail
+
+
+def test_parse_lane_variants() -> None:
+    assert job_radar.parse_lane(None) == ("ambos", None)
+    assert job_radar.parse_lane("realista") == ("realista", None)
+    assert job_radar.parse_lane("ambiciosa forecasting") == ("ambicioso", "forecasting")
+    assert job_radar.parse_lane("forecasting remote") == ("ambos", "forecasting remote")
+
+
+async def test_realistic_lane_skips_boards_and_dream_companies(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.services.job_radar.settings.job_radar_queries", "q1")
+    boards = AsyncMock()
+    monkeypatch.setattr("app.services.job_radar._run_boards", boards)
+    with patch(
+        "app.services.job_radar.exa_client.search",
+        AsyncMock(return_value=_hits("lane-real")),
+    ):
+        result = await job_radar.run_radar(db, lane="realista")
+    boards.assert_not_awaited()
+    assert result.lane == "realista"
+    assert all(not lead.dream for lead in result.new_leads)
+    assert [lead.company for lead in result.new_leads] == ["Recursion"] or all(
+        lead.company != "Anthropic" for lead in result.new_leads
+    )
+    text = fmt.format_job_radar(result)
+    assert "liga realista" in text
+    assert "Liga ambiciosa" not in text
+
+
+async def test_ambitious_lane_skips_exa(db: aiosqlite.Connection, monkeypatch) -> None:
+    monkeypatch.setattr("app.services.job_radar.settings.job_radar_queries", "q1")
+    search = AsyncMock(return_value=_hits("lane-amb"))
+    monkeypatch.setattr("app.services.job_radar._run_boards", AsyncMock())
+    with patch("app.services.job_radar.exa_client.search", search):
+        result = await job_radar.run_radar(db, lane="ambicioso")
+    search.assert_not_awaited()
+    text = fmt.format_job_radar(result)
+    assert "liga ambiciosa" in text
+    assert "Liga realista" not in text
+
+
+async def test_mood_phrase_routes_to_jobs_lane(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    monkeypatch.setattr("app.services.job_radar.settings.job_radar_queries", "q1")
+    monkeypatch.setattr("app.services.job_radar._run_boards", AsyncMock())
+    with patch(
+        "app.services.job_radar.exa_client.search",
+        AsyncMock(return_value=_hits("mood")),
+    ):
+        text = await handle_operator_text("hoy me siento realista", db, chat_id=5300)
+    assert text is not None and "liga realista" in text
