@@ -26,6 +26,7 @@ from app.db.queries import (
     get_signals_by_ids,
     get_telegram_session,
     reset_editorial_tables,
+    reset_job_tables,
     upsert_telegram_session,
 )
 from app.integrations.telegram_client import send_document
@@ -196,7 +197,8 @@ _APPLIED_RE = re.compile(
 )
 _PIPELINE_RE = re.compile(
     r"^(?:pipeline|mis\s+aplicaciones|aplicaciones|"
-    r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)\s*[?¿!]*\s*$",
+    r"c[oó]mo\s+voy\s+con\s+las\s+vacantes)"
+    r"(?:\s+(?P<lane>realistas?|ambicios[oa]s?))?\s*[?¿!]*\s*$",
     re.I,
 )
 _CAMPAIGN_START_RE = re.compile(
@@ -319,6 +321,8 @@ _FIRST_TOKENS: dict[str, CommandName] = {
     "publique": CommandName.PUBLISHED,
     "posts": CommandName.POSTS,
     "reset_editorial": CommandName.RESET_EDITORIAL,
+    "reset_vacantes": CommandName.RESET_JOBS,
+    "reset_todo": CommandName.RESET_ALL,
     "jobs": CommandName.JOBS,
     "vacantes": CommandName.JOBS,
     "aplicado": CommandName.APPLIED,
@@ -885,10 +889,11 @@ def _natural_command(
             query=f"{applied_match.group('id')} {applied_match.group('rest')}".strip(),
             raw_text=text,
         )
-    if _PIPELINE_RE.match(lowered):
+    pipeline_match = _PIPELINE_RE.match(lowered)
+    if pipeline_match is not None:
         return ParsedTelegramCommand(
             name=CommandName.PIPELINE,
-            query=None,
+            query=pipeline_match.group("lane"),
             raw_text=text,
         )
     if _RECAP_RE.match(stripped):
@@ -2006,6 +2011,10 @@ async def handle_command(
         return telegram_formatting.format_lead_status_ack(lead, counts)
 
     if command.name == CommandName.PIPELINE:
+        lane, _ = job_radar.parse_lane(command.query)
+        if lane in ("realista", "ambicioso"):
+            league = await job_radar.league_new(db, lane=lane, limit=15)
+            return telegram_formatting.format_league(lane, league)
         grouped = await job_radar.pipeline(db)
         return telegram_formatting.format_pipeline(grouped)
 
@@ -2179,6 +2188,20 @@ async def handle_command(
         counts = await reset_editorial_tables(db)
         _CHAT_STATE.clear()
         return telegram_formatting.format_reset_done(counts)
+
+    if command.name == CommandName.RESET_JOBS:
+        if (command.query or "").strip().lower() != "confirmar":
+            return telegram_formatting.format_reset_jobs_confirmation()
+        job_counts = await reset_job_tables(db)
+        return telegram_formatting.format_reset_jobs_done(job_counts)
+
+    if command.name == CommandName.RESET_ALL:
+        if (command.query or "").strip().lower() != "confirmar":
+            return telegram_formatting.format_reset_all_confirmation()
+        counts = await reset_editorial_tables(db)
+        counts.update(await reset_job_tables(db))
+        _CHAT_STATE.clear()
+        return telegram_formatting.format_reset_done(counts, everything=True)
 
     if command.name == CommandName.DIAG:
         current_goal = await active_goals.get_current(db)

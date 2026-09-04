@@ -823,6 +823,25 @@ _RESETTABLE_TABLES: tuple[str, ...] = (
 )
 
 
+_JOB_TABLES: tuple[str, ...] = ("campaigns", "job_leads")
+
+
+async def reset_job_tables(db: aiosqlite.Connection) -> dict[str, int]:
+    """Empty the job radar and campaign tables and restart their ids at 1.
+
+    The master CV (operator_state) and the goal survive.
+    """
+    counts: dict[str, int] = {}
+    for table in _JOB_TABLES:
+        cursor = await db.execute(f"SELECT COUNT(*) FROM {table}")  # noqa: S608
+        row = await cursor.fetchone()
+        counts[table] = int(row[0]) if row is not None else 0
+        await db.execute(f"DELETE FROM {table}")  # noqa: S608
+        await db.execute("DELETE FROM sqlite_sequence WHERE name = ?", (table,))
+    await db.commit()
+    return counts
+
+
 async def reset_editorial_tables(db: aiosqlite.Connection) -> dict[str, int]:
     """Empty every editorial table and restart their ids at 1.
 
@@ -1208,7 +1227,8 @@ async def update_campaign_plan(
     db: aiosqlite.Connection, *, campaign_id: int, plan_json: str
 ) -> None:
     await db.execute(
-        "UPDATE campaigns SET plan_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        "UPDATE campaigns SET plan_json = ?, updated_at = CURRENT_TIMESTAMP"
+        " WHERE id = ?",
         (plan_json, campaign_id),
     )
     await db.commit()

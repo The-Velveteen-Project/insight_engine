@@ -837,6 +837,19 @@ async def pipeline(db: aiosqlite.Connection) -> dict[JobStatus, list[JobLead]]:
     return grouped
 
 
+async def league_new(
+    db: aiosqlite.Connection, *, lane: Lane, limit: int = 15
+) -> list[JobLead]:
+    """Stored `new` leads of one league, best fit first. What `jobs` found
+    before but the chat only showed six of."""
+    rows = await list_job_leads(db, statuses=(JobStatus.NEW.value,), limit=400)
+    leads = [_row_to_lead(row) for row in rows]
+    wanted = lane == "ambicioso"
+    league = [lead for lead in leads if lead.dream is wanted]
+    league.sort(key=lambda lead: lead.fit_score, reverse=True)
+    return league[:limit]
+
+
 async def status_counts(db: aiosqlite.Connection) -> dict[str, int]:
     return await count_job_leads_by_status(db)
 

@@ -375,3 +375,33 @@ async def test_mood_phrase_routes_to_jobs_lane(
     ):
         text = await handle_operator_text("hoy me siento realista", db, chat_id=5300)
     assert text is not None and "liga realista" in text
+
+
+async def test_pipeline_by_league_and_reset_jobs(
+    db: aiosqlite.Connection, monkeypatch
+) -> None:
+    from app.services import campaign as campaign_service
+
+    monkeypatch.setattr("app.services.job_radar.settings.job_radar_queries", "q1")
+    monkeypatch.setattr("app.services.job_radar._run_boards", AsyncMock())
+    with patch(
+        "app.services.job_radar.exa_client.search",
+        AsyncMock(return_value=_hits("league")),
+    ):
+        await job_radar.run_radar(db)
+
+    realistic = await handle_operator_text("pipeline realista", db, chat_id=5400)
+    assert realistic is not None
+    assert "Liga realista" in realistic
+    assert "Anthropic" not in realistic and "Recursion" not in realistic
+    ambitious = await handle_command("/pipeline ambicioso", db)
+    assert "Liga ambiciosa" in ambitious
+    assert "Anthropic" in ambitious or "Recursion" in ambitious
+
+    ask = await handle_command("/reset_vacantes", db)
+    assert "confirmar" in ask
+    assert await job_radar.league_new(db, lane="realista")
+    done = await handle_command("/reset_vacantes confirmar", db)
+    assert "Vacantes reiniciadas" in done
+    assert not await job_radar.league_new(db, lane="realista")
+    assert await campaign_service.current(db) is None

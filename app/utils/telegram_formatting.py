@@ -1224,7 +1224,7 @@ def format_reset_confirmation() -> str:
     )
 
 
-def format_reset_done(counts: dict[str, int]) -> str:
+def format_reset_done(counts: dict[str, int], *, everything: bool = False) -> str:
     labels = {
         "signals": "señales",
         "editorial_plans": "planes",
@@ -1234,7 +1234,14 @@ def format_reset_done(counts: dict[str, int]) -> str:
         "messages": "mensajes",
         "telegram_sessions": "sesiones",
     }
-    lines = ["<b>Editorial reiniciado.</b> Los próximos ids empiezan en 1."]
+    if everything:
+        labels.update({"job_leads": "vacantes", "campaigns": "objetivos del mes"})
+    header = (
+        "<b>Todo reiniciado.</b> Los próximos ids empiezan en 1."
+        if everything
+        else "<b>Editorial reiniciado.</b> Los próximos ids empiezan en 1."
+    )
+    lines = [header]
     for table, label in labels.items():
         lines.append(f"• {label}: {counts.get(table, 0)} borrados")
     lines.append("")
@@ -1694,7 +1701,7 @@ def format_campaign(progress: CampaignProgress) -> str:
     ]
     for item in campaign.plan.items:
         lines.append(_plan_item_line(item))
-        lines.append(f"   {escape_text(compact_text(item.why, 160))}")
+        lines.append(f"   {escape_text(item.why)}")
     lines.append("")
     if progress.next_items:
         nxt = progress.next_items[0]
@@ -1820,4 +1827,67 @@ def format_friday_recap(report: RecapReport, *, scheduled: bool = False) -> str:
     lines.append(f"<b>Lectura honesta</b> · {report.score:.1f}/3")
     lines.append(escape_text(report.verdict))
     lines.append(escape_text("; ".join(report.reasons) + "."))
+    return "\n".join(lines)
+
+
+def format_reset_jobs_confirmation() -> str:
+    return "\n".join(
+        [
+            "<b>Reinicio de vacantes</b>",
+            (
+                "Esto borra todas las vacantes guardadas, su pipeline y el objetivo "
+                "del mes, y reinicia los ids en 1. El goal y el CV maestro se "
+                "conservan. Lo editorial (señales, planes, posts) no se toca."
+            ),
+            "",
+            "Si es lo que quieres: <code>/reset_vacantes confirmar</code>",
+            "Para borrar también lo editorial: <code>/reset_todo confirmar</code>",
+        ]
+    )
+
+
+def format_reset_all_confirmation() -> str:
+    return "\n".join(
+        [
+            "<b>Reinicio total</b>",
+            (
+                "Esto borra señales, planes, drafts, posts registrados, vacantes, "
+                "pipeline y objetivo del mes, y reinicia todos los ids en 1. "
+                "Se conservan el goal activo y el CV maestro."
+            ),
+            "",
+            "Si es lo que quieres: <code>/reset_todo confirmar</code>",
+        ]
+    )
+
+
+def format_reset_jobs_done(counts: dict[str, int]) -> str:
+    return "\n".join(
+        [
+            "<b>Vacantes reiniciadas.</b> La próxima vacante será la #1.",
+            f"• vacantes: {counts.get('job_leads', 0)} borradas",
+            f"• objetivos del mes: {counts.get('campaigns', 0)} borrados",
+            "",
+            "Cuando quieras: <code>jobs realista</code> o <code>jobs ambicioso</code>.",
+        ]
+    )
+
+
+def format_league(lane: str, leads: list[JobLead]) -> str:
+    label = "realista" if lane == "realista" else "ambiciosa"
+    lines = [f"<b>Liga {label} · vacantes nuevas guardadas</b>"]
+    if not leads:
+        lines.append(
+            f"No hay vacantes nuevas en esta liga. Busca con <code>jobs {lane}</code>."
+        )
+        return "\n".join(lines)
+    lines.append(f"{len(leads)} mejores por fit. Las que ya moviste no aparecen.")
+    lines.append("")
+    for lead in leads:
+        lines.extend(_lead_lines(lead, with_note=False))
+    lines.append("")
+    lines.append(
+        "Antes de aplicar: <code>brecha &lt;id&gt;</code>. "
+        "Para limpiar: <code>estado &lt;id&gt; descartado</code>."
+    )
     return "\n".join(lines)

@@ -47,6 +47,8 @@ class CommandName(StrEnum):
     CAMPAIGN_ABANDON = "abandonar_objetivo"
     RECAP = "recap"
     RESET_EDITORIAL = "reset_editorial"
+    RESET_JOBS = "reset_vacantes"
+    RESET_ALL = "reset_todo"
     DIAG = "diag"
     HELP = "help"
     UNKNOWN = "unknown"
