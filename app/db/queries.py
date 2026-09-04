@@ -895,6 +895,20 @@ async def insert_job_lead(
     return int(row[0]), False
 
 
+async def known_job_lead_urls(db: aiosqlite.Connection, urls: list[str]) -> set[str]:
+    """Which of `urls` already exist as leads. Chunked to stay under SQLite's
+    parameter limit."""
+    known: set[str] = set()
+    for start in range(0, len(urls), 500):
+        chunk = urls[start : start + 500]
+        placeholders = ",".join("?" for _ in chunk)
+        cursor = await db.execute(
+            f"SELECT url FROM job_leads WHERE url IN ({placeholders})", chunk
+        )
+        known.update(str(row[0]) for row in await cursor.fetchall())
+    return known
+
+
 async def get_job_lead_by_id(
     db: aiosqlite.Connection, lead_id: int
 ) -> aiosqlite.Row | None:

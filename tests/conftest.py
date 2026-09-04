@@ -14,6 +14,8 @@ os.environ["ACTIVE_GOAL_TEXT"] = ""
 os.environ["ENABLE_SCHEDULER"] = "false"
 # Tests mock arxiv + exa; never let a local .env re-enable a live source
 os.environ["DISCOVERY_ENABLED_SOURCES"] = "arxiv,exa"
+# Job boards are read over the network; tests enable them per case with mocks.
+os.environ["JOB_BOARD_SOURCES"] = ""
 
 _db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _db.close()

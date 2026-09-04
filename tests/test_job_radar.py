@@ -110,7 +110,7 @@ async def test_run_radar_reports_failure_honestly(
         result = await job_radar.run_radar(db)
     assert result.all_failed
     text = fmt.format_job_radar(result)
-    assert "Ninguna búsqueda respondió" in text
+    assert "Ninguna fuente respondió" in text
     assert "EXA_API_KEY" in text
 
 

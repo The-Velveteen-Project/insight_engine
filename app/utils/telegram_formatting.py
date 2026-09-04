@@ -1370,18 +1370,21 @@ def format_job_radar(result: RadarResult, *, scheduled: bool = False) -> str:
     if result.all_failed:
         first_error = failed[0].error or "sin detalle"
         lines.append(
-            "Ninguna búsqueda respondió. "
+            "Ninguna fuente respondió (ni las bolsas directas ni Exa). "
             f"Error: <code>{escape_text(first_error)}</code>. "
-            "Revisa <code>diag</code> y la clave de Exa."
+            "Revisa <code>diag</code>, la clave de Exa y la red."
         )
         return "\n".join(lines)
     lines.append(
-        f"{len(result.outcomes)} búsquedas · {fetched} resultados · "
+        f"{len(result.outcomes)} fuentes · {fetched} resultados · "
         f"{len(result.new_leads)} nuevas · {result.already_known} ya conocidas · "
         f"{result.below_fit} descartadas por fit bajo."
     )
     if failed:
-        lines.append(f"{len(failed)} búsqueda(s) fallaron; el resto sí respondió.")
+        names = ", ".join(escape_text(outcome.query) for outcome in failed[:3])
+        lines.append(
+            f"{len(failed)} fuente(s) fallaron ({names}); el resto sí respondió."
+        )
     lines.append("")
     if not result.new_leads:
         lines.append(

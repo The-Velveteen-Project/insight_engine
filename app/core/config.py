@@ -92,6 +92,15 @@ class Settings(BaseSettings):
         "Anthropic,OpenAI,Google DeepMind,Mistral,Cohere,Hugging Face,"
         "Allen Institute,Isomorphic Labs,Recursion,Arc Institute,Chan Zuckerberg"
     )
+    # Boards read directly (no Exa): "kind:slug:Company" entries separated by
+    # ";". Greenhouse and Ashby have public JSON endpoints. Google DeepMind's
+    # Greenhouse board lists only its US-posted roles; the rest of its careers
+    # site has no public feed.
+    job_board_sources: str = (
+        "greenhouse:anthropic:Anthropic;"
+        "ashby:openai:OpenAI;"
+        "greenhouse:deepmind:Google DeepMind"
+    )
     job_radar_days: int = 21
     job_min_fit: float = 0.3
     # Salary reference for the goal (USD 4k/month) and enrichment limits:
@@ -141,6 +150,19 @@ class Settings(BaseSettings):
         return tuple(
             d.strip().lower() for d in self.job_radar_domains.split(",") if d.strip()
         )
+
+    @property
+    def job_board_source_list(self) -> tuple[tuple[str, str, str], ...]:
+        """(kind, board slug, company name) triples; malformed entries skipped."""
+        sources: list[tuple[str, str, str]] = []
+        for entry in self.job_board_sources.split(";"):
+            parts = [part.strip() for part in entry.split(":")]
+            if len(parts) != 3 or not all(parts):
+                continue
+            kind, slug, company = parts
+            if kind.lower() in {"greenhouse", "ashby"}:
+                sources.append((kind.lower(), slug, company))
+        return tuple(sources)
 
     @property
     def job_target_company_list(self) -> tuple[str, ...]:

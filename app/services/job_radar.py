@@ -10,6 +10,12 @@ Design choices:
   score decides ordering; Carlos decides applications.
 - Dream companies (Anthropic and peers) are flagged and sorted first even
   when the fit score is modest, because the goal names them explicitly.
+- The companies the goal names are read from their own boards (Greenhouse,
+  Ashby) before Exa runs, so a new Anthropic or OpenAI posting shows up the
+  week it appears, not when a search engine indexes it. Board postings pass
+  a title gate (research, scientist, fellow, ML) instead of the fit
+  threshold: they are dream leads by definition, the gate keeps recruiters
+  and managers out.
 - Every run reports what it tried: how many results came back, how many
   were already known, and whether the source failed.
 """
@@ -29,13 +35,14 @@ from app.db.queries import (
     count_job_leads_by_status,
     get_job_lead_by_id,
     insert_job_lead,
+    known_job_lead_urls,
     list_job_leads,
     list_job_leads_pending_enrichment,
     set_job_lead_posting_text,
     update_job_lead_details,
     update_job_lead_status,
 )
-from app.integrations import exa_client
+from app.integrations import exa_client, job_boards
 from app.schemas.jobs import (
     ACTIVE_STATUSES,
     JobLead,
@@ -66,6 +73,8 @@ _ROLE_TERMS: dict[str, float] = {
     "machine learning scientist": 0.35,
     "ml scientist": 0.35,
     "research fellow": 0.3,
+    "fellows program": 0.35,
+    "fellowship": 0.3,
     "member of technical staff": 0.3,
     "scientist, machine learning": 0.35,
     "forward deployed engineer": 0.15,
@@ -144,6 +153,60 @@ _BOARD_COMPANY_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("apply.workable.com", re.compile(r"^/([^/?#]+)")),
     ("jobs.smartrecruiters.com", re.compile(r"^/([^/?#]+)")),
 )
+# Title gate for postings read directly from a dream company's board. The
+# board lists everything (sales, legal, recruiting); only research-shaped
+# individual-contributor titles become leads.
+_BOARD_TITLE_INCLUDE: tuple[str, ...] = (
+    "research",
+    "scientist",
+    "fellow",
+    "machine learning",
+    "reinforcement learning",
+    "alignment",
+    "interpretability",
+    "post-training",
+    "pretraining",
+    "pre-training",
+    "evals",
+    "evaluation",
+    "ml ",
+    "ml/",
+)
+_BOARD_TITLE_EXCLUDE: tuple[str, ...] = (
+    "data scientist",
+    "support",
+    "architect",
+    "solutions",
+    "infrastructure",
+    "platform",
+    "ads ",
+    "growth",
+    "account",
+    "recruiter",
+    "sourcer",
+    "manager",
+    "counsel",
+    "marketing",
+    "sales",
+    "people ",
+    "communications",
+    "designer",
+    "director",
+    "head of",
+    "lead ",
+    "staff ",
+    "principal",
+    "senior ",
+    "economist",
+    "partner",
+    "strategy",
+    "product ",
+    "operations",
+    "administrator",
+    "coordinator",
+    "analyst",
+)
+
 _TITLE_COMPANY_RE = re.compile(
     r"^(?P<title>.+?)\s+(?:at|@|-|–|\|)\s+(?P<company>[^|\-–]+?)\s*$"
 )
@@ -308,12 +371,20 @@ def score_fit(
     if dream:
         notes.append(f"empresa objetivo: {company}")
 
+    # Seniority words count only in the title: posting bodies mention "staff"
+    # and "principal" in boilerplate. Year requirements count anywhere.
+    title_lower = f" {title.lower()} "
     penalty = 0.0
-    penalty_hits = [term.strip() for term in _PENALTY_TERMS if term in corpus]
+    penalty_hits = [
+        term.strip()
+        for term in _PENALTY_TERMS
+        if (term in corpus if "years" in term else term in title_lower)
+    ]
     if penalty_hits:
         penalty += _PENALTY
         notes.append("seniority fuera de rango: " + ", ".join(penalty_hits[:2]))
-    noise_hits = [term for term in _NOISE_TERMS if term in corpus]
+    # Same for non-technical roles: "sales" shows up in company boilerplate.
+    noise_hits = [term for term in _NOISE_TERMS if term in title_lower]
     if noise_hits:
         penalty += _NOISE_PENALTY
         notes.append("no es un rol técnico")
@@ -321,6 +392,118 @@ def score_fit(
     total = role_score + domain_score + location_score + dream_score - penalty
     total = max(0.0, min(total, 1.0))
     return round(total, 3), " · ".join(notes) or "sin coincidencias claras", dream
+
+
+def board_title_passes(title: str) -> bool:
+    lowered = f" {title.lower()} "
+    if any(term in lowered for term in _BOARD_TITLE_EXCLUDE):
+        return False
+    return any(term in lowered for term in _BOARD_TITLE_INCLUDE)
+
+
+def candidate_from_board(
+    posting: job_boards.BoardPosting, *, company: str
+) -> JobLeadCandidate | None:
+    if not board_title_passes(posting.title):
+        return None
+    facts = " · ".join(part for part in (posting.location, posting.department) if part)
+    body = trim_to_boundary(posting.text, 500)
+    summary = trim_to_boundary(f"{facts}. {body}" if facts else body, 600)
+    fit, note, dream = score_fit(
+        title=posting.title, summary=f"{facts} {body}", company=company
+    )
+    return JobLeadCandidate(
+        source=posting.board,
+        source_id=posting.source_id,
+        title=posting.title[:300],
+        company=company,
+        url=posting.url,
+        location=(posting.location or "")[:160] or None,
+        remote=posting.remote,
+        summary=summary,
+        published_at=posting.published_at,
+        fit_score=fit,
+        fit_note=note,
+        dream=dream,
+    )
+
+
+async def _run_boards(
+    db: aiosqlite.Connection, result: RadarResult, seen_urls: set[str]
+) -> None:
+    """Read each configured board and persist the research-shaped postings
+    not seen before. Descriptions are fetched only for new Greenhouse leads."""
+    for kind, slug, company in settings.job_board_source_list:
+        outcome = RadarOutcome(query=f"{company} · {kind}")
+        try:
+            if kind == "greenhouse":
+                postings = await job_boards.fetch_greenhouse(slug)
+            else:
+                postings = await job_boards.fetch_ashby(slug)
+        except Exception as exc:
+            outcome.failed = True
+            outcome.error = trim_to_boundary(str(exc), 160) or exc.__class__.__name__
+            result.outcomes.append(outcome)
+            logger.warning("Job board %s/%s failed: %s", kind, slug, exc)
+            continue
+
+        candidates = [
+            candidate
+            for posting in postings
+            if (candidate := candidate_from_board(posting, company=company)) is not None
+        ]
+        outcome.fetched = len(candidates)
+        result.outcomes.append(outcome)
+        by_url = {posting.url: posting for posting in postings}
+        known = await known_job_lead_urls(db, [c.url for c in candidates])
+
+        for candidate in candidates:
+            if candidate.url in seen_urls:
+                continue
+            seen_urls.add(candidate.url)
+            if candidate.url in known:
+                result.already_known += 1
+                continue
+            posting = by_url[candidate.url]
+            text = posting.text
+            if not text and posting.board == "greenhouse":
+                try:
+                    text = await job_boards.fetch_greenhouse_content(
+                        slug, posting.source_id
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "Greenhouse content for %s failed: %s", posting.url, exc
+                    )
+                    text = ""
+            if text:
+                # Score again with the body: domain terms live there. Location
+                # and department stay in front so the remote bonus still counts.
+                fit, note, dream = score_fit(
+                    title=candidate.title,
+                    summary=f"{candidate.summary[:200]} {text[:4000]}",
+                    company=company,
+                )
+                candidate = candidate.model_copy(
+                    update={"fit_score": fit, "fit_note": note, "dream": dream}
+                )
+            # The company is certain here, so the fit threshold applies even
+            # to dream boards: a support or ads role at OpenAI is not a lead.
+            if candidate.fit_score < settings.job_min_fit:
+                result.below_fit += 1
+                result.below_fit_samples.append(candidate)
+                continue
+            lead_id, created = await _persist(db, candidate)
+            if not created:
+                result.already_known += 1
+                continue
+            if text:
+                await set_job_lead_posting_text(
+                    db, lead_id=lead_id, posting_text=text[:12000]
+                )
+            row = await get_job_lead_by_id(db, lead_id)
+            if row is not None:
+                result.new_leads.append(_row_to_lead(row))
 
 
 def candidate_from_exa(result: exa_client.ExaResultDict) -> JobLeadCandidate | None:
@@ -398,6 +581,10 @@ async def run_radar(
     result = RadarResult()
     seen_urls: set[str] = set()
 
+    # Dream boards first; an ad-hoc `jobs <tema>` stays a pure search.
+    if not (query and query.strip()):
+        await _run_boards(db, result, seen_urls)
+
     for radar_query in queries:
         outcome = RadarOutcome(query=radar_query)
         try:
@@ -452,8 +639,8 @@ async def run_radar(
     result.below_fit_samples.sort(key=lambda c: c.fit_score, reverse=True)
     del result.below_fit_samples[3:]
     logger.info(
-        "Job radar: %d queries, %d new, %d known, %d below fit.",
-        len(queries),
+        "Job radar: %d sources, %d new, %d known, %d below fit.",
+        len(result.outcomes),
         len(result.new_leads),
         result.already_known,
         result.below_fit,
