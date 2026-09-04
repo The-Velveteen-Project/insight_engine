@@ -143,6 +143,8 @@ def _details_text(lead: JobLead) -> str:
 
 async def _lead_with_details(db: aiosqlite.Connection, lead_id: int) -> JobLead:
     lead = await job_radar.get_lead(db, lead_id)
+    if not lead.has_posting_text and await job_radar.ensure_posting_text(db, lead_id):
+        lead = await job_radar.get_lead(db, lead_id)
     if lead.details is None and lead.has_posting_text:
         enriched = await job_radar.enrich_lead(db, lead_id)
         if enriched is not None:
@@ -242,7 +244,7 @@ async def tailor_cv(
     return lead, cv, markdown, gap
 
 
-def cv_filename(lead: JobLead) -> str:
+def cv_filename(lead: JobLead, *, extension: str = "md") -> str:
     company = (lead.company or "role").lower()
     slug = "".join(ch if ch.isalnum() else "-" for ch in company).strip("-") or "role"
-    return f"Carlos_Orrego_CV_{slug}_{lead.id}.md"
+    return f"Carlos_Orrego_CV_{slug}_{lead.id}.{extension}"

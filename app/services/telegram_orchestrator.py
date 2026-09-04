@@ -53,6 +53,7 @@ from app.schemas.jobs import JobStatus
 from app.schemas.mvp_handoff import MvpHandoffPack
 from app.services import (
     active_goals,
+    cv_docx,
     cv_tailor,
     diagnostics,
     discovery_service,
@@ -1986,6 +1987,23 @@ async def handle_command(
                 sent_as_file = True
             except Exception as exc:
                 logger.warning("CV document send failed for lead %s: %s", lead_id, exc)
+            try:
+                master = await cv_tailor.load_master(db)
+                docx_bytes = cv_docx.render_docx(
+                    cv, identity_block=master.identity_block
+                )
+                await send_document(
+                    chat_id,
+                    filename=cv_tailor.cv_filename(lead, extension="docx"),
+                    content=docx_bytes,
+                    caption="Misma versión en .docx, lista para editar o exportar a PDF.",
+                    mime_type=(
+                        "application/vnd.openxmlformats-officedocument"
+                        ".wordprocessingml.document"
+                    ),
+                )
+            except Exception as exc:
+                logger.warning("CV docx send failed for lead %s: %s", lead_id, exc)
         return telegram_formatting.format_cv_delivered(
             lead, cv, markdown, gap=cv_gap, sent_as_file=sent_as_file
         )
@@ -1998,6 +2016,10 @@ async def handle_command(
             lead = await job_radar.get_lead(db, lead_id)
         except LookupError:
             return _not_found("Vacante", lead_id)
+        if not lead.has_posting_text and await job_radar.ensure_posting_text(
+            db, lead_id
+        ):
+            lead = await job_radar.get_lead(db, lead_id)
         if lead.details is None and lead.has_posting_text:
             enriched = await job_radar.enrich_lead(db, lead_id)
             if enriched is not None:

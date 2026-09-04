@@ -52,3 +52,5 @@ Carlos_Orrego_CV*
 *.docx
 *.pdf
 data/cv_master.md
+cv_master*.md
+**/cv_master*.md

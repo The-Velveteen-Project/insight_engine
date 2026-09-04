@@ -1531,9 +1531,9 @@ def format_gap_analysis(lead: JobLead, gap: GapAnalysis) -> str:
         lines.append("<b>Lo que cubres</b>")
         for item in gap.covered:
             mark = _STRENGTH_MARKS.get(item.strength, "•")
+            # Schema-bounded already; clipping here cut evidence mid-sentence.
             lines.append(
-                f"{mark} {escape_text(compact_text(item.requirement, 90))}: "
-                f"{escape_text(compact_text(item.evidence, 200))}"
+                f"{mark} {escape_text(item.requirement)}: {escape_text(item.evidence)}"
             )
         lines.append("")
     if gap.missing:

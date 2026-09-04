@@ -171,8 +171,8 @@ async def test_cv_command_sends_document_and_uses_master_identity(
     with patch("app.services.telegram_orchestrator.send_document", sent):
         text = await handle_command(f"/cv {lead_id}", db, chat_id=6101)
 
-    sent.assert_awaited_once()
-    kwargs = sent.await_args.kwargs
+    assert sent.await_count == 2
+    kwargs = sent.await_args_list[0].kwargs
     assert kwargs["filename"] == f"Carlos_Orrego_CV_deepgram_{lead_id}.md"
     body = kwargs["content"].decode("utf-8")
     assert body.startswith("Carlos Manuel Orrego Franco")
@@ -232,3 +232,78 @@ async def test_cv_master_upload_through_telegram_document(
     master = await cv_tailor.load_master(db)
     assert master.source == "db"
     assert master.dropped_verify_lines == 1
+
+
+async def test_lead_without_text_recovers_it_by_url_before_gap(
+    db: aiosqlite.Connection, master_file: Path, monkeypatch
+) -> None:
+    lead_id, _ = await insert_job_lead(
+        db,
+        source="exa",
+        source_id=None,
+        title="Research Engineer",
+        company="Deepgram",
+        url="https://jobs.lever.co/deepgram/old-lead-no-text",
+        location=None,
+        remote=None,
+        summary="",
+        published_at=None,
+        fit_score=0.6,
+        fit_note="rol: research engineer",
+        dream=False,
+    )
+    contents = AsyncMock(
+        return_value=[{"url": "x", "text": "Recovered posting: needs forecasting."}]
+    )
+    monkeypatch.setattr("app.services.job_radar.exa_client.get_contents", contents)
+    monkeypatch.setattr(
+        "app.services.job_radar.get_job_details_extractor", lambda: None
+    )
+
+    seen_users: list[str] = []
+
+    class _Analyst:
+        async def generate(self, *, system: str, user: str) -> GapAnalysis:
+            seen_users.append(user)
+            return _gap()
+
+    monkeypatch.setattr("app.services.cv_tailor.get_gap_analyst", lambda: _Analyst())
+    await handle_command(f"/brecha {lead_id}", db)
+    contents.assert_awaited_once()
+    assert "Recovered posting" in seen_users[0]
+
+
+def test_render_docx_produces_a_word_file() -> None:
+    from app.services.cv_docx import render_docx
+
+    payload = render_docx(
+        _cv(), identity_block="Carlos Manuel Orrego Franco\nManizales"
+    )
+    assert payload[:2] == b"PK"
+    assert len(payload) > 5000
+
+
+async def test_cv_command_sends_markdown_and_docx(
+    db: aiosqlite.Connection, master_file: Path, monkeypatch
+) -> None:
+    lead_id = await _lead_with_text(db, "both")
+
+    class _Analyst:
+        async def generate(self, *, system: str, user: str) -> GapAnalysis:
+            return _gap()
+
+    class _Writer:
+        async def generate(self, *, system: str, user: str) -> TailoredCV:
+            return _cv()
+
+    monkeypatch.setattr("app.services.cv_tailor.get_gap_analyst", lambda: _Analyst())
+    monkeypatch.setattr("app.services.cv_tailor.get_cv_writer", lambda: _Writer())
+    sent = AsyncMock()
+    with patch("app.services.telegram_orchestrator.send_document", sent):
+        await handle_command(f"/cv {lead_id}", db, chat_id=6103)
+    names = [call.kwargs["filename"] for call in sent.await_args_list]
+    assert names == [
+        f"Carlos_Orrego_CV_deepgram_{lead_id}.md",
+        f"Carlos_Orrego_CV_deepgram_{lead_id}.docx",
+    ]
+    assert sent.await_args_list[1].kwargs["content"][:2] == b"PK"

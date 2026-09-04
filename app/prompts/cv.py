@@ -35,6 +35,8 @@ Rules:
   about himself.
 - Never invent facts, numbers, or skills. If the posting lacks detail, say
   the analysis is limited by what the posting states.
+- Every text field ends in a complete sentence. If you are running long,
+  shorten the idea; never stop mid-word or mid-clause.
 """.strip()
 
 
@@ -62,6 +64,8 @@ Hard rules:
   which posting requirements the CV still cannot show. This is for Carlos,
   not for the employer.
 - English. Fit on one page: roughly 450–600 words across all fields.
+- Every field ends in a complete sentence or a complete phrase. Never stop
+  mid-word to fit a length limit; shorten the idea instead.
 - Output must fit the schema exactly.
 """.strip()
 

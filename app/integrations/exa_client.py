@@ -108,6 +108,40 @@ def _parse_results(raw_results: list[ExaResultDict]) -> list[SignalCandidate]:
     return candidates
 
 
+async def get_contents(
+    urls: list[str],
+    *,
+    text_max_characters: int = 6000,
+) -> list[ExaResultDict]:
+    """Fetch page text for known URLs (Exa /contents). Used to recover the
+    posting text of leads found before text was stored."""
+    api_key = settings.exa_api_key.strip()
+    if not api_key:
+        raise RuntimeError("EXA_API_KEY no configurada")
+    if not urls:
+        return []
+
+    transport = httpx.AsyncHTTPTransport(retries=2)
+    async with httpx.AsyncClient(
+        headers={"User-Agent": _USER_AGENT, "x-api-key": api_key},
+        timeout=_TIMEOUT,
+        transport=transport,
+    ) as client:
+        response = await client.post(
+            "https://api.exa.ai/contents",
+            json={"urls": urls, "text": {"maxCharacters": text_max_characters}},
+        )
+        response.raise_for_status()
+
+    payload = response.json()
+    if not isinstance(payload, dict):
+        raise RuntimeError("Unexpected Exa contents payload: expected JSON object.")
+    raw_results = payload.get("results", [])
+    if not isinstance(raw_results, list):
+        raise RuntimeError("Unexpected Exa contents payload: expected 'results' list.")
+    return [cast(ExaResultDict, item) for item in raw_results if isinstance(item, dict)]
+
+
 async def search(
     query: str,
     *,

@@ -461,6 +461,34 @@ async def run_radar(
     return result
 
 
+async def ensure_posting_text(db: aiosqlite.Connection, lead_id: int) -> bool:
+    """Recover the posting text by URL for leads stored without it.
+
+    Returns True when text is available afterwards. Never raises: a failed
+    fetch just leaves the lead as it was, and callers say so honestly.
+    """
+    row = await get_job_lead_by_id(db, lead_id)
+    if row is None:
+        return False
+    keys = row.keys()
+    if "posting_text" in keys and row["posting_text"]:
+        return True
+    url = str(row["url"])
+    try:
+        results = await exa_client.get_contents([url])
+    except Exception as exc:
+        logger.warning("Posting text recovery failed for lead %s: %s", lead_id, exc)
+        return False
+    for item in results:
+        text = (item.get("text") or "").strip()
+        if text:
+            await set_job_lead_posting_text(
+                db, lead_id=lead_id, posting_text=text[:12000]
+            )
+            return True
+    return False
+
+
 async def enrich_lead(db: aiosqlite.Connection, lead_id: int) -> JobLead | None:
     """Extract salary/country/requirements from the stored posting text.
 

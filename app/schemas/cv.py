@@ -13,20 +13,22 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+# Length caps are generous on purpose: models cut text mid-word to satisfy a
+# tight maxLength, and a clipped sentence is worse than a long one.
 class RequirementEvidence(BaseModel):
-    requirement: str = Field(min_length=3, max_length=200)
-    evidence: str = Field(min_length=3, max_length=320)
+    requirement: str = Field(min_length=3, max_length=240)
+    evidence: str = Field(min_length=3, max_length=480)
     strength: Literal["strong", "partial", "weak"]
 
 
 class GapAnalysis(BaseModel):
     verdict: Literal["apply_now", "apply_with_tailoring", "stretch", "skip"]
-    verdict_reason: str = Field(min_length=20, max_length=480)
+    verdict_reason: str = Field(min_length=20, max_length=800)
     covered: list[RequirementEvidence] = Field(default_factory=list, max_length=8)
     missing: list[str] = Field(default_factory=list, max_length=6)
     foreground: list[str] = Field(min_length=1, max_length=4)
     keywords_to_mirror: list[str] = Field(default_factory=list, max_length=8)
-    opener: str = Field(min_length=20, max_length=480)
+    opener: str = Field(min_length=20, max_length=700)
 
 
 class CVEntry(BaseModel):
@@ -44,7 +46,7 @@ class TailoredCV(BaseModel):
     publications: list[str] = Field(default_factory=list, max_length=4)
     distinctions: list[str] = Field(default_factory=list, max_length=5)
     skills: list[str] = Field(min_length=1, max_length=6)
-    tailoring_notes: str = Field(min_length=20, max_length=600)
+    tailoring_notes: str = Field(min_length=20, max_length=1400)
 
     def render_markdown(self, *, identity_block: str) -> str:
         """One-page Markdown CV. Identity comes from the master, never the model."""
