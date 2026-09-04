@@ -61,7 +61,7 @@ def test_completion_params_uses_max_completion_tokens_everywhere() -> None:
     assert legacy == {"max_completion_tokens": 100, "temperature": 0.2}
 
     reasoning = completion_params("gpt-5.6-luna", max_tokens=100, temperature=0.2)
-    assert reasoning == {"max_completion_tokens": 100}
+    assert reasoning == {"max_completion_tokens": 8100}
 
     routed = completion_params("openai/gpt-5.4-mini", max_tokens=50, temperature=0)
     assert "temperature" not in routed

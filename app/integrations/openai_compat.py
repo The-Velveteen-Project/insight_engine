@@ -44,6 +44,15 @@ def build_async_openai_client(
 # `temperature` other than the default. Older chat models accept both names.
 _FIXED_TEMPERATURE_PREFIXES = ("gpt-5", "o1", "o3", "o4")
 
+# Reasoning tokens are billed against max_completion_tokens. With a long
+# prompt (master CV + posting) gpt-5.6 spent the whole 1400-token budget
+# thinking and returned nothing, so reasoning models get extra headroom.
+_REASONING_TOKEN_RESERVE = 8000
+
+
+def is_reasoning_model(model: str) -> bool:
+    return model.split("/")[-1].lower().startswith(_FIXED_TEMPERATURE_PREFIXES)
+
 
 class CompletionParams(TypedDict, total=False):
     max_completion_tokens: int
@@ -61,8 +70,9 @@ def completion_params(
     `max_completion_tokens` is understood by the whole chat lineup; `max_tokens`
     is rejected by gpt-5.x. Temperature is only sent to models that honor it.
     """
-    params: CompletionParams = {"max_completion_tokens": max_tokens}
-    bare = model.split("/")[-1].lower()
-    if temperature is not None and not bare.startswith(_FIXED_TEMPERATURE_PREFIXES):
+    reasoning = is_reasoning_model(model)
+    budget = max_tokens + _REASONING_TOKEN_RESERVE if reasoning else max_tokens
+    params: CompletionParams = {"max_completion_tokens": budget}
+    if temperature is not None and not reasoning:
         params["temperature"] = temperature
     return params
